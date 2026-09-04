@@ -148,3 +148,28 @@ def load_job_factions(game_root: Path) -> dict[int, str]:
             if result:
                 return result
     raise RuntimeError("游戏 ModEditor 中没有找到 FactionJobData 势力职位表")
+
+
+def load_kungfu_catalog(game_root: Path) -> dict[int, tuple[str, int]]:
+    """Return kungfu ID -> (display name, maximum level)."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "KungfuData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[int, tuple[str, int]] = {}
+            for row in workbook["KungfuData"].iter_rows(min_row=4, min_col=2, max_col=9, values_only=True):
+                try:
+                    kungfu_id, max_level = int(row[0]), int(row[7])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(row[1], str) and row[1]:
+                    result[kungfu_id] = (row[1], max_level)
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到 KungfuData 武功表")
