@@ -7,11 +7,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import es3_codec
-from game_data import load_character_names, load_item_catalog
+from game_data import load_character_names, load_faction_names, load_item_catalog, load_job_factions
 from paths import discover_game_roots, discover_save_roots, is_game_root, is_save_root, load_preferences, save_preferences
 
 TEAM_FILE = "SaveObjectPlayerTeam.save"
 CHAR_FILE = "SaveObjectGameCharacter.save"
+FACTION_FILE = "SaveObjectFaction.save"
 class Editor(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -32,10 +33,14 @@ class Editor(tk.Tk):
         self.item_names: dict[int, str] = {}
         self.item_categories: dict[int, str] = {}
         self.character_names: dict[int, str] = {}
+        self.faction_names: dict[int, str] = {}
+        self.job_factions: dict[int, str] = {}
         self.hero_current_name = ""
         self.team_data = None
         self.char_data = None
+        self.faction_data = None
         self.inventory = None
+        self.all_characters: dict[str, dict] = {}
         self.characters: dict[str, dict] = {}
         self.character_status: dict[str, str] = {}
         self._build()
@@ -43,20 +48,27 @@ class Editor(tk.Tk):
 
     def _build(self) -> None:
         top = ttk.Frame(self, padding=10); top.pack(fill="x")
-        self.path_label = tk.StringVar()
-        ttk.Label(top, textvariable=self.path_label).pack(side="left", padx=(0, 8))
-        ttk.Button(top, text="选择存档目录", command=self.choose_save_root).pack(side="left")
-        ttk.Button(top, text="选择游戏目录", command=self.choose_game_root).pack(side="left", padx=6)
-        self.slots = ttk.Combobox(top, textvariable=self.slot, width=18, state="readonly")
+        game_row = ttk.Frame(top); game_row.pack(fill="x", pady=(0, 4))
+        save_row = ttk.Frame(top); save_row.pack(fill="x")
+        self.game_path_label = tk.StringVar(); self.save_path_label = tk.StringVar()
+        ttk.Label(game_row, text="游戏目录：").pack(side="left")
+        ttk.Label(game_row, textvariable=self.game_path_label, width=78, anchor="w").pack(side="left", padx=(0, 8))
+        ttk.Button(game_row, text="选择游戏目录", command=self.choose_game_root).pack(side="left")
+        ttk.Label(save_row, text="存档目录：").pack(side="left")
+        ttk.Label(save_row, textvariable=self.save_path_label, width=52, anchor="w").pack(side="left", padx=(0, 8))
+        ttk.Button(save_row, text="选择存档目录", command=self.choose_save_root).pack(side="left")
+        ttk.Label(save_row, text="存档槽").pack(side="left", padx=(12, 2))
+        self.slots = ttk.Combobox(save_row, textvariable=self.slot, width=14, state="readonly")
         self.slots.pack(side="left")
-        ttk.Button(top, text="读取存档", command=self.load_slot).pack(side="left", padx=6)
-        ttk.Label(top, text="请先完全退出游戏；保存会备份整个存档槽。").pack(side="right")
+        ttk.Button(save_row, text="读取存档", command=self.load_slot).pack(side="left", padx=6)
 
         notebook = ttk.Notebook(self); notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         item_tab = ttk.Frame(notebook, padding=10); char_tab = ttk.Frame(notebook, padding=10)
+        relation_tab = ttk.Frame(notebook, padding=10)
         notebook.add(item_tab, text="物品栏：数量 / 添加")
         notebook.add(char_tab, text="队友：属性")
-        self._items(item_tab); self._characters(char_tab)
+        notebook.add(relation_tab, text="关系：NPC / 势力")
+        self._items(item_tab); self._characters(char_tab); self._relations(relation_tab)
         self.status = tk.StringVar(value="请选择一个手动存档或快速存档，再读取。")
         ttk.Label(self, textvariable=self.status, anchor="w", padding=(10, 0, 10, 10)).pack(fill="x")
         self.update_path_label()
@@ -123,6 +135,53 @@ class Editor(tk.Tk):
         ttk.Button(bar, text="修改选中属性", command=self.set_prop).pack(side="left", padx=4)
         ttk.Button(bar, text="保存角色属性", command=lambda: self.save("characters")).pack(side="right")
 
+    def _relations(self, parent: ttk.Frame) -> None:
+        notebook = ttk.Notebook(parent); notebook.pack(fill="both", expand=True)
+        npc_tab = ttk.Frame(notebook, padding=10); faction_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(npc_tab, text="NPC 关系")
+        notebook.add(faction_tab, text="势力关系")
+
+        self.npc_filter = tk.StringVar(); self.npc_value = tk.StringVar()
+        npc_bar = ttk.Frame(npc_tab); npc_bar.pack(fill="x", pady=(0, 8))
+        self.npc_group = tk.StringVar(value="请选择势力")
+        ttk.Label(npc_bar, text="势力 / 城镇").pack(side="left")
+        self.npc_group_box = ttk.Combobox(npc_bar, textvariable=self.npc_group, width=23, state="readonly")
+        self.npc_group_box.pack(side="left", padx=4)
+        self.npc_group_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh_npc_relations())
+        ttk.Label(npc_bar, text="搜索 NPC").pack(side="left")
+        npc_search = ttk.Entry(npc_bar, textvariable=self.npc_filter, width=35); npc_search.pack(side="left", padx=4)
+        npc_search.bind("<KeyRelease>", lambda _event: self.refresh_npc_relations())
+        ttk.Label(npc_bar, text="关系值（-100 至 100）").pack(side="left", padx=(14, 0))
+        ttk.Entry(npc_bar, textvariable=self.npc_value, width=10).pack(side="left", padx=4)
+        ttk.Button(npc_bar, text="修改选中 NPC", command=self.set_npc_relation).pack(side="left", padx=4)
+        ttk.Button(npc_bar, text="保存 NPC 关系", command=lambda: self.save("relations")).pack(side="right")
+        npc_box = ttk.Frame(npc_tab); npc_box.pack(fill="both", expand=True)
+        self.npc_tree = ttk.Treeview(npc_box, columns=("name", "id", "value"), show="headings", selectmode="browse")
+        for column, label, width in (("name", "NPC", 330), ("id", "角色 ID", 130), ("value", "关系", 100)):
+            self.npc_tree.heading(column, text=label); self.npc_tree.column(column, width=width)
+        npc_scroll = ttk.Scrollbar(npc_box, orient="vertical", command=self.npc_tree.yview)
+        self.npc_tree.configure(yscrollcommand=npc_scroll.set)
+        self.npc_tree.pack(side="left", fill="both", expand=True); npc_scroll.pack(side="right", fill="y")
+        self.npc_tree.bind("<<TreeviewSelect>>", self.pick_npc_relation)
+
+        self.faction_filter = tk.StringVar(); self.faction_value = tk.StringVar()
+        faction_bar = ttk.Frame(faction_tab); faction_bar.pack(fill="x", pady=(0, 8))
+        ttk.Label(faction_bar, text="搜索势力").pack(side="left")
+        faction_search = ttk.Entry(faction_bar, textvariable=self.faction_filter, width=35); faction_search.pack(side="left", padx=4)
+        faction_search.bind("<KeyRelease>", lambda _event: self.refresh_factions())
+        ttk.Label(faction_bar, text="关系值（-100 至 100）").pack(side="left", padx=(14, 0))
+        ttk.Entry(faction_bar, textvariable=self.faction_value, width=10).pack(side="left", padx=4)
+        ttk.Button(faction_bar, text="修改选中势力", command=self.set_faction_relation).pack(side="left", padx=4)
+        ttk.Button(faction_bar, text="保存势力关系", command=lambda: self.save("faction")).pack(side="right")
+        faction_box = ttk.Frame(faction_tab); faction_box.pack(fill="both", expand=True)
+        self.faction_tree = ttk.Treeview(faction_box, columns=("name", "id", "value"), show="headings", selectmode="browse")
+        for column, label, width in (("name", "势力", 330), ("id", "势力 ID", 130), ("value", "关系", 100)):
+            self.faction_tree.heading(column, text=label); self.faction_tree.column(column, width=width)
+        faction_scroll = ttk.Scrollbar(faction_box, orient="vertical", command=self.faction_tree.yview)
+        self.faction_tree.configure(yscrollcommand=faction_scroll.set)
+        self.faction_tree.pack(side="left", fill="both", expand=True); faction_scroll.pack(side="right", fill="y")
+        self.faction_tree.bind("<<TreeviewSelect>>", self.pick_faction_relation)
+
     def reload_slots(self) -> None:
         if self.root_path is None:
             self.slots["values"] = []
@@ -135,7 +194,8 @@ class Editor(tk.Tk):
     def update_path_label(self) -> None:
         game = str(self.game_root) if self.game_root else "未找到"
         save = str(self.root_path) if self.root_path else "未找到"
-        self.path_label.set(f"游戏：{game}    存档：{save}")
+        self.game_path_label.set(game)
+        self.save_path_label.set(save)
 
     def choose_save_root(self) -> None:
         chosen = filedialog.askdirectory(title="选择存档根目录（包含 Save0、QuickSave0 等文件夹）", initialdir=str(self.root_path or Path.home()))
@@ -169,6 +229,7 @@ class Editor(tk.Tk):
             folder = self.root_path / self.slot.get()
             self.team_data = es3_codec.load(folder / TEAM_FILE)
             self.char_data = es3_codec.load(folder / CHAR_FILE)
+            self.faction_data = es3_codec.load(folder / FACTION_FILE)
             team = self.team_data["Data"]["value"]
             self.inventory = team["playerTeamInventory"]["contents"]
             if not self.item_names:
@@ -178,7 +239,12 @@ class Editor(tk.Tk):
                 self.category_box["values"] = ["全部", *sorted(set(self.item_categories.values()))]
             if not self.character_names:
                 self.character_names = load_character_names(self.game_root)
+            if not self.faction_names:
+                self.faction_names = load_faction_names(self.game_root)
+            if not self.job_factions:
+                self.job_factions = load_job_factions(self.game_root)
             all_characters = self.char_data["Data"]["value"]["createdCharacter"]
+            self.all_characters = all_characters
             hero = all_characters.get("100401", {})
             self.hero_current_name = (hero.get("m_surName") or "") + (hero.get("m_givenName") or "")
             active_ids = {str(i) for i in team["playerTeam"]}
@@ -189,7 +255,7 @@ class Editor(tk.Tk):
                 if character_id in active_ids or isinstance(member_state, dict):
                     self.characters[character_id] = character
                     self.character_status[character_id] = ("出战中" if character_id in active_ids else ("已入队，未出战" if member_state.get("isJoined") else "曾入队，现已离队"))
-            self.refresh_items(); self.refresh_characters()
+            self.refresh_items(); self.refresh_characters(); self.refresh_npc_relations(); self.refresh_factions()
             self.status.set(f"已读取 {self.slot.get()}：{len(self.inventory)} 个物品，{len(self.characters)} 名当前或曾经入队角色；已载入官方物品和角色名称。")
         except Exception as exc:
             messagebox.showerror("读取失败", str(exc))
@@ -284,6 +350,102 @@ class Editor(tk.Tk):
         self.characters[char[0]]["m_originProps"][prop[0]] = int(value) if value.is_integer() else value
         self.show_props(); self.status.set("角色属性已在内存中修改；点击“保存角色属性”才会写入磁盘。")
 
+    def refresh_npc_relations(self) -> None:
+        if self.char_data is None:
+            return
+        self.npc_tree.delete(*self.npc_tree.get_children())
+        needle = self.npc_filter.get().strip().casefold()
+        hero_relations = self.all_characters.get("100401", {}).get("relationShip", {})
+        rows = []
+        for character_id, value in hero_relations.items():
+            character = self.all_characters.get(str(character_id))
+            if character is None:
+                continue
+            name = self.display_name(character)
+            if needle and needle not in name.casefold() and needle not in str(character_id):
+                continue
+            group = self.job_factions.get(character.get("m_factionJob"), "其他 / 无势力")
+            rows.append((name, str(character_id), value, group))
+        groups: dict[str, int] = {}
+        for _name, _character_id, _value, group in rows:
+            groups[group] = groups.get(group, 0) + 1
+        group_values = ["请选择势力", f"全部 NPC（{len(rows)}）", *[f"{group}（{count}）" for group, count in sorted(groups.items())]]
+        if tuple(self.npc_group_box["values"]) != tuple(group_values):
+            self.npc_group_box["values"] = group_values
+        selected_group = self.npc_group.get()
+        if selected_group == "请选择势力":
+            return
+        if selected_group != group_values[1]:
+            selected_group = selected_group.rsplit("（", 1)[0]
+            rows = [row for row in rows if row[3] == selected_group]
+        for name, character_id, value, _group in sorted(rows, key=lambda row: (row[0], int(row[1]))):
+            self.npc_tree.insert("", "end", iid=character_id, values=(name, character_id, value))
+
+    def pick_npc_relation(self, _=None) -> None:
+        selected = self.npc_tree.selection()
+        if selected:
+            self.npc_value.set(str(self.npc_tree.item(selected[0], "values")[2]))
+
+    def set_npc_relation(self) -> None:
+        selected = self.npc_tree.selection()
+        if not selected:
+            return messagebox.showwarning("尚未选择", "请选择一个 NPC。")
+        try:
+            value = int(self.npc_value.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "关系值必须是 -100 到 100 的整数。")
+        if not -100 <= value <= 100:
+            return messagebox.showwarning("输入错误", "关系值范围为 -100 到 100。")
+        character_id = selected[0]
+        hero = self.all_characters["100401"]
+        hero.setdefault("relationShip", {})[character_id] = value
+        target = self.all_characters.get(character_id)
+        if target is not None:
+            target.setdefault("relationShip", {})["100401"] = value
+        self.refresh_npc_relations()
+        self.status.set("NPC 关系已在内存中修改；点击“保存 NPC 关系”才会写入磁盘。")
+
+    def refresh_factions(self) -> None:
+        if self.faction_data is None:
+            return
+        self.faction_tree.delete(*self.faction_tree.get_children())
+        needle = self.faction_filter.get().strip().casefold()
+        factions = self.faction_data["Data"]["value"].get("factions", {})
+        rows = []
+        for faction_id, faction in factions.items():
+            numeric_id = faction.get("templeteId", faction_id)
+            name = self.faction_names.get(int(numeric_id), f"未知势力 {numeric_id}")
+            if needle and needle not in name.casefold() and needle not in str(numeric_id):
+                continue
+            rows.append((name, str(numeric_id), faction.get("playerFame", 0)))
+        for name, faction_id, value in sorted(rows, key=lambda row: (row[0], int(row[1]))):
+            self.faction_tree.insert("", "end", iid=faction_id, values=(name, faction_id, value))
+
+    def pick_faction_relation(self, _=None) -> None:
+        selected = self.faction_tree.selection()
+        if selected:
+            self.faction_value.set(str(self.faction_tree.item(selected[0], "values")[2]))
+
+    def set_faction_relation(self) -> None:
+        selected = self.faction_tree.selection()
+        if not selected:
+            return messagebox.showwarning("尚未选择", "请选择一个势力。")
+        try:
+            value = int(self.faction_value.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "关系值必须是 -100 到 100 的整数。")
+        if not -100 <= value <= 100:
+            return messagebox.showwarning("输入错误", "关系值范围为 -100 到 100。")
+        faction_id = selected[0]
+        faction_state = self.faction_data["Data"]["value"]
+        faction_state["factions"][faction_id]["playerFame"] = value
+        # ES3 persists both ID- and name-keyed dictionaries; keep them consistent.
+        for faction in faction_state.get("factionDict", {}).values():
+            if str(faction.get("templeteId")) == faction_id:
+                faction["playerFame"] = value
+        self.refresh_factions()
+        self.status.set("势力关系已在内存中修改；点击“保存势力关系”才会写入磁盘。")
+
     def save(self, target: str) -> None:
         if self.team_data is None: return messagebox.showwarning("尚未读取", "请先读取存档。")
         if not messagebox.askyesno("确认写入", "游戏必须已经完全退出。将先完整备份这个存档槽，然后原子写入并回读校验。继续？"): return
@@ -291,7 +453,8 @@ class Editor(tk.Tk):
             folder = self.root_path / self.slot.get(); backup = self.root_path / "_EditorBackups" / f"{self.slot.get()}_{datetime.now():%Y%m%d_%H%M%S}"
             backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
             if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
-            else: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
+            elif target in {"characters", "relations"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
+            else: es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
             self.status.set(f"已保存并回读校验。完整备份：{backup}")
             messagebox.showinfo("完成", "写入成功。请启动游戏读取该存档验证效果。")
         except Exception as exc:

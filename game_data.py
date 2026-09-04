@@ -97,3 +97,54 @@ def load_character_names(game_root: Path) -> dict[int, str]:
             if result:
                 return result
     raise RuntimeError("游戏 ModEditor 中没有找到 CharacterPoolData 角色表")
+
+
+def load_faction_names(game_root: Path) -> dict[int, str]:
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    if not archive.is_file():
+        raise FileNotFoundError(f"未找到游戏自带势力表：{archive}")
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "FactionData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[int, str] = {}
+            for faction_id, name in workbook["FactionData"].iter_rows(min_row=4, min_col=2, max_col=3, values_only=True):
+                try:
+                    faction_id = int(faction_id)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(name, str) and name:
+                    result[faction_id] = name
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到 FactionData 势力表")
+
+
+def load_job_factions(game_root: Path) -> dict[int, str]:
+    """Return faction job ID -> parent faction display name."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "FactionJobData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[int, str] = {}
+            for job_id, _name, faction_name in workbook["FactionJobData"].iter_rows(min_row=4, min_col=2, max_col=4, values_only=True):
+                try:
+                    job_id = int(job_id)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(faction_name, str) and faction_name:
+                    result[job_id] = faction_name
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到 FactionJobData 势力职位表")
