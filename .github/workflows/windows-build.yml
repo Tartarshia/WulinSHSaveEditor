@@ -1,0 +1,23 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+      - run: python -m pip install -r requirements-build.txt
+      - run: python test_public.py
+      - run: python -m PyInstaller --noconfirm --clean --windowed --onefile --name WulinSHSaveEditor app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WulinSHSaveEditor-windows-x64
+          path: dist/WulinSHSaveEditor.exe

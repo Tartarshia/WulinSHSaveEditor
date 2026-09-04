@@ -1,0 +1,9 @@
+__pycache__/
+_EditorBackups/
+config.local.json
+build/
+dist/
+artifacts/
+*.save
+*.spec
+*.pyc
