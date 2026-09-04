@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import es3_codec
-from game_data import load_character_names, load_faction_names, load_item_catalog, load_job_factions, load_kungfu_catalog
+from game_data import load_character_names, load_faction_names, load_item_catalog, load_job_factions, load_kungfu_catalog, load_life_ability_catalog, load_jianghu_experience_max
 from paths import discover_game_roots, discover_save_roots, is_game_root, is_save_root, load_preferences, save_preferences
 
 TEAM_FILE = "SaveObjectPlayerTeam.save"
@@ -36,6 +36,8 @@ class Editor(tk.Tk):
         self.faction_names: dict[int, str] = {}
         self.job_factions: dict[int, str] = {}
         self.kungfu_catalog: dict[int, tuple[str, int]] = {}
+        self.life_ability_catalog: dict[str, int] = {}
+        self.jianghu_experience_max = 1_000_000
         self.hero_current_name = ""
         self.team_data = None
         self.char_data = None
@@ -46,6 +48,8 @@ class Editor(tk.Tk):
         self.character_status: dict[str, str] = {}
         self.character_level = tk.StringVar(); self.character_exp = tk.StringVar()
         self.ability_level = tk.StringVar(); self.ability_exp = tk.StringVar()
+        self.life_ability_level = tk.StringVar(); self.life_ability_exp = tk.StringVar()
+        self.jianghu_experience = tk.StringVar(); self.global_book_summary = tk.StringVar(value="读取存档后显示武功秘籍统计。")
         self._build()
         self.reload_slots()
 
@@ -67,11 +71,12 @@ class Editor(tk.Tk):
 
         notebook = ttk.Notebook(self); notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         item_tab = ttk.Frame(notebook, padding=10); char_tab = ttk.Frame(notebook, padding=10)
-        relation_tab = ttk.Frame(notebook, padding=10)
+        relation_tab = ttk.Frame(notebook, padding=10); global_tab = ttk.Frame(notebook, padding=10)
         notebook.add(item_tab, text="物品栏：数量 / 添加")
         notebook.add(char_tab, text="队友：属性")
         notebook.add(relation_tab, text="关系：NPC / 势力")
-        self._items(item_tab); self._characters(char_tab); self._relations(relation_tab)
+        notebook.add(global_tab, text="全局修改")
+        self._items(item_tab); self._characters(char_tab); self._relations(relation_tab); self._global(global_tab)
         self.status = tk.StringVar(value="请选择一个手动存档或快速存档，再读取。")
         ttk.Label(self, textvariable=self.status, anchor="w", padding=(10, 0, 10, 10)).pack(fill="x")
         self.update_path_label()
@@ -127,38 +132,76 @@ class Editor(tk.Tk):
         self.char_tree.pack(fill="y")
         self.char_tree.bind("<<TreeviewSelect>>", self.show_props)
         right = ttk.Frame(parent); right.pack(side="left", fill="both", expand=True, padx=(12, 0))
-        ttk.Label(right, text="包含出战、已入队未出战和曾入队已离队角色；仅修改基础属性，不碰剧情状态、好感、任务或成就。").pack(anchor="w")
-        self.prop_tree = ttk.Treeview(right, columns=("name", "value"), show="headings")
+        pages = ttk.Notebook(right); pages.pack(fill="both", expand=True)
+        props_page = ttk.Frame(pages, padding=8); life_page = ttk.Frame(pages, padding=8); kungfu_page = ttk.Frame(pages, padding=8)
+        pages.add(props_page, text="角色基础属性")
+        pages.add(life_page, text="主角生活能力")
+        pages.add(kungfu_page, text="已学武功")
+
+        ttk.Label(props_page, text="包含出战、已入队未出战和曾入队已离队角色；仅修改基础属性，不碰剧情状态、好感、任务或成就。").pack(anchor="w")
+        self.prop_tree = ttk.Treeview(props_page, columns=("name", "value"), show="headings")
         self.prop_tree.heading("name", text="属性"); self.prop_tree.heading("value", text="数值")
         self.prop_tree.column("name", width=350); self.prop_tree.column("value", width=120)
         self.prop_tree.pack(fill="both", expand=True, pady=8)
-        bar = ttk.Frame(right); bar.pack(fill="x")
+        bar = ttk.Frame(props_page); bar.pack(fill="x")
         ttk.Label(bar, text="新数值").pack(side="left")
         self.prop_value = tk.StringVar(); ttk.Entry(bar, textvariable=self.prop_value, width=12).pack(side="left", padx=4)
         ttk.Button(bar, text="修改选中属性", command=self.set_prop).pack(side="left", padx=4)
         ttk.Button(bar, text="保存角色属性", command=lambda: self.save("characters")).pack(side="right")
-        ttk.Separator(right).pack(fill="x", pady=8)
-        level_bar = ttk.Frame(right); level_bar.pack(fill="x")
+        ttk.Separator(props_page).pack(fill="x", pady=8)
+        level_bar = ttk.Frame(props_page); level_bar.pack(fill="x")
         ttk.Label(level_bar, text="角色等级").pack(side="left")
         ttk.Entry(level_bar, textvariable=self.character_level, width=7).pack(side="left", padx=4)
         ttk.Label(level_bar, text="经验").pack(side="left", padx=(8, 0))
         ttk.Entry(level_bar, textvariable=self.character_exp, width=12).pack(side="left", padx=4)
         ttk.Button(level_bar, text="修改角色等级/经验", command=self.set_character_level).pack(side="left", padx=4)
-        ttk.Label(right, text="已学能力 / 武功（等级受游戏数据表中的最大等级限制）").pack(anchor="w", pady=(6, 0))
-        ability_box = ttk.Frame(right); ability_box.pack(fill="both", expand=True)
+        ttk.Label(life_page, text="仅主角。显示采集、制造、鉴定、市井、生存等所有生活能力；等级上限来自游戏数据表。").pack(anchor="w")
+        life_box = ttk.Frame(life_page); life_box.pack(fill="both", expand=True, pady=(6, 0))
+        self.life_ability_tree = ttk.Treeview(life_box, columns=("category", "name", "level", "max", "exp"), show="headings", selectmode="browse")
+        for column, label, width in (("category", "分类", 90), ("name", "能力", 130), ("level", "等级", 60), ("max", "上限", 60), ("exp", "经验", 120)):
+            self.life_ability_tree.heading(column, text=label); self.life_ability_tree.column(column, width=width)
+        life_scroll = ttk.Scrollbar(life_box, orient="vertical", command=self.life_ability_tree.yview)
+        self.life_ability_tree.configure(yscrollcommand=life_scroll.set)
+        self.life_ability_tree.pack(side="left", fill="both", expand=True); life_scroll.pack(side="right", fill="y")
+        self.life_ability_tree.bind("<<TreeviewSelect>>", self.pick_life_ability)
+        life_bar = ttk.Frame(life_page); life_bar.pack(fill="x", pady=(6, 0))
+        ttk.Label(life_bar, text="等级").pack(side="left")
+        ttk.Entry(life_bar, textvariable=self.life_ability_level, width=7).pack(side="left", padx=4)
+        ttk.Label(life_bar, text="经验").pack(side="left", padx=(8, 0))
+        ttk.Entry(life_bar, textvariable=self.life_ability_exp, width=12).pack(side="left", padx=4)
+        ttk.Button(life_bar, text="修改选中生活能力", command=self.set_life_ability).pack(side="left", padx=4)
+        ttk.Button(life_bar, text="保存角色属性", command=lambda: self.save("characters")).pack(side="right")
+
+        ttk.Label(kungfu_page, text="已学武功（等级上限来自游戏数据表）。").pack(anchor="w")
+        ability_box = ttk.Frame(kungfu_page); ability_box.pack(fill="both", expand=True, pady=(6, 0))
         self.ability_tree = ttk.Treeview(ability_box, columns=("name", "id", "level", "max", "exp"), show="headings", height=7, selectmode="browse")
-        for column, label, width in (("name", "能力 / 武功", 200), ("id", "ID", 80), ("level", "等级", 55), ("max", "上限", 55), ("exp", "经验", 90)):
+        for column, label, width in (("name", "武功", 200), ("id", "ID", 80), ("level", "等级", 55), ("max", "上限", 55), ("exp", "经验", 90)):
             self.ability_tree.heading(column, text=label); self.ability_tree.column(column, width=width)
         ability_scroll = ttk.Scrollbar(ability_box, orient="vertical", command=self.ability_tree.yview)
         self.ability_tree.configure(yscrollcommand=ability_scroll.set)
         self.ability_tree.pack(side="left", fill="both", expand=True); ability_scroll.pack(side="right", fill="y")
         self.ability_tree.bind("<<TreeviewSelect>>", self.pick_ability)
-        ability_bar = ttk.Frame(right); ability_bar.pack(fill="x", pady=(4, 0))
+        ability_bar = ttk.Frame(kungfu_page); ability_bar.pack(fill="x", pady=(4, 0))
         ttk.Label(ability_bar, text="等级").pack(side="left")
         ttk.Entry(ability_bar, textvariable=self.ability_level, width=7).pack(side="left", padx=4)
         ttk.Label(ability_bar, text="经验").pack(side="left", padx=(8, 0))
         ttk.Entry(ability_bar, textvariable=self.ability_exp, width=12).pack(side="left", padx=4)
-        ttk.Button(ability_bar, text="修改选中能力", command=self.set_ability).pack(side="left", padx=4)
+        ttk.Button(ability_bar, text="修改选中武功", command=self.set_ability).pack(side="left", padx=4)
+
+    def _global(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="全局修改只在内存中变更；点击本页“保存全局修改”后才会备份并写入存档。").pack(anchor="w")
+        books = ttk.LabelFrame(parent, text="武功秘籍", padding=12); books.pack(fill="x", pady=(12, 8))
+        ttk.Label(books, textvariable=self.global_book_summary).pack(anchor="w")
+        ttk.Label(books, text="仅添加背包中尚未拥有的官方武功秘籍；已有的秘籍及其数量不会改动。").pack(anchor="w", pady=(4, 8))
+        ttk.Button(books, text="一键添加未拥有的武功秘籍", command=self.add_missing_kungfu_books).pack(anchor="w")
+
+        knowledge = ttk.LabelFrame(parent, text="江湖历练", padding=12); knowledge.pack(fill="x", pady=8)
+        ttk.Label(knowledge, text="经验池数值（可用于提升角色和武功等级）").pack(side="left")
+        ttk.Entry(knowledge, textvariable=self.jianghu_experience, width=14).pack(side="left", padx=8)
+        ttk.Button(knowledge, text="修改江湖历练", command=self.set_jianghu_experience).pack(side="left")
+        self.jianghu_limit_label = ttk.Label(knowledge, text="读取存档后显示上限。"); self.jianghu_limit_label.pack(side="left", padx=12)
+
+        ttk.Button(parent, text="保存全局修改", command=lambda: self.save("global")).pack(anchor="e", pady=(12, 0))
 
     def _relations(self, parent: ttk.Frame) -> None:
         notebook = ttk.Notebook(parent); notebook.pack(fill="both", expand=True)
@@ -270,6 +313,9 @@ class Editor(tk.Tk):
                 self.job_factions = load_job_factions(self.game_root)
             if not self.kungfu_catalog:
                 self.kungfu_catalog = load_kungfu_catalog(self.game_root)
+            if not self.life_ability_catalog:
+                self.life_ability_catalog = load_life_ability_catalog(self.game_root)
+            self.jianghu_experience_max = load_jianghu_experience_max(self.game_root)
             all_characters = self.char_data["Data"]["value"]["createdCharacter"]
             self.all_characters = all_characters
             hero = all_characters.get("100401", {})
@@ -282,8 +328,8 @@ class Editor(tk.Tk):
                 if character_id in active_ids or isinstance(member_state, dict):
                     self.characters[character_id] = character
                     self.character_status[character_id] = ("出战中" if character_id in active_ids else ("已入队，未出战" if member_state.get("isJoined") else "曾入队，现已离队"))
-            self.refresh_items(); self.refresh_characters(); self.refresh_npc_relations(); self.refresh_factions()
-            self.status.set(f"已读取 {self.slot.get()}：{len(self.inventory)} 个物品，{len(self.characters)} 名当前或曾经入队角色；已载入官方物品和角色名称。")
+            self.refresh_items(); self.refresh_characters(); self.refresh_npc_relations(); self.refresh_factions(); self.refresh_global()
+            self.status.set(f"已读取 {self.slot.get()}：{len(self.inventory)} 个物品，{len(self.characters)} 名当前或曾经入队角色；已载入官方物品、角色和生活能力数据。")
         except Exception as exc:
             messagebox.showerror("读取失败", str(exc))
 
@@ -347,6 +393,45 @@ class Editor(tk.Tk):
         if not sel: return
         del self.inventory[int(sel[0])]; self.refresh_items()
 
+    def refresh_global(self) -> None:
+        book_ids = {item_id for item_id, category in self.item_categories.items() if category == "武功秘籍"}
+        owned = {item.get("m_templeteId") for item in self.inventory or []}
+        missing = book_ids - owned
+        self.global_book_summary.set(f"官方武功秘籍：{len(book_ids)} 件；背包已有：{len(book_ids & owned)} 件；可补齐：{len(missing)} 件。")
+        hero = self.all_characters.get("100401", {})
+        self.jianghu_experience.set(str(hero.get("m_additionProps", {}).get("江湖历练", 0)))
+        self.jianghu_limit_label.configure(text=f"游戏当前版本上限：{self.jianghu_experience_max:,}")
+
+    def add_missing_kungfu_books(self) -> None:
+        if self.inventory is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        book_ids = {item_id for item_id, category in self.item_categories.items() if category == "武功秘籍"}
+        owned = {item.get("m_templeteId") for item in self.inventory}
+        missing = sorted(book_ids - owned)
+        if not missing:
+            return messagebox.showinfo("无需添加", "背包中已经拥有全部官方武功秘籍。")
+        if not messagebox.askyesno("确认添加", f"将向背包添加 {len(missing)} 件尚未拥有的武功秘籍，每件 1 份。已有物品不会改动；之后仍需点击“保存全局修改”才会写入磁盘。继续？"):
+            return
+        self.inventory.extend({"m_templeteId": item_id, "m_stack": 1, "modifyData": None, "IsNew": False, "IsForbidden": False} for item_id in missing)
+        self.refresh_items(); self.refresh_global()
+        self.status.set(f"已在内存中补齐 {len(missing)} 件未拥有的武功秘籍；点击“保存全局修改”才会写入磁盘。")
+
+    def set_jianghu_experience(self) -> None:
+        if self.char_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        try:
+            value = int(self.jianghu_experience.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "江湖历练必须是整数。")
+        if not 0 <= value <= self.jianghu_experience_max:
+            return messagebox.showwarning("输入错误", f"江湖历练范围为 0–{self.jianghu_experience_max:,}。")
+        hero = self.all_characters.get("100401")
+        if not isinstance(hero, dict):
+            return messagebox.showwarning("无法修改", "此存档没有找到主角数据。")
+        hero.setdefault("m_additionProps", {})["江湖历练"] = value
+        self.refresh_global()
+        self.status.set("江湖历练已在内存中修改；点击“保存全局修改”才会写入磁盘。")
+
     def refresh_characters(self) -> None:
         self.char_tree.delete(*self.char_tree.get_children())
         for cid, character in self.characters.items():
@@ -372,6 +457,7 @@ class Editor(tk.Tk):
         self.character_level.set(str(character.get("m_level", 1)))
         self.character_exp.set(str(character.get("m_exp", 0)))
         self.refresh_abilities(character)
+        self.refresh_life_abilities()
 
     def set_prop(self) -> None:
         char, prop = self.char_tree.selection(), self.prop_tree.selection()
@@ -394,6 +480,42 @@ class Editor(tk.Tk):
         character = self.characters[selected[0]]
         character["m_level"], character["m_exp"] = level, exp
         self.show_props(); self.status.set("角色等级和经验已在内存中修改；点击“保存角色属性”才会写入磁盘。")
+
+    def refresh_life_abilities(self) -> None:
+        self.life_ability_tree.delete(*self.life_ability_tree.get_children())
+        hero = self.all_characters.get("100401", {})
+        props = hero.get("m_additionProps", {})
+        for key, maximum in sorted(self.life_ability_catalog.items()):
+            _, category, name = key.split("_", 2)
+            exp_key = "能力经验_" + key[len("能力_"):]
+            self.life_ability_tree.insert("", "end", iid=key, values=(category, name, props.get(key, 0), maximum, props.get(exp_key, 0)))
+
+    def pick_life_ability(self, _=None) -> None:
+        selected = self.life_ability_tree.selection()
+        if selected:
+            values = self.life_ability_tree.item(selected[0], "values")
+            self.life_ability_level.set(str(values[2])); self.life_ability_exp.set(str(values[4]))
+
+    def set_life_ability(self) -> None:
+        selected = self.life_ability_tree.selection()
+        if not selected:
+            return messagebox.showwarning("尚未选择", "请选择主角生活能力。")
+        try:
+            level, exp = int(self.life_ability_level.get()), float(self.life_ability_exp.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "等级必须是整数，经验必须是数字。")
+        key = selected[0]
+        maximum = self.life_ability_catalog[key]
+        if not 0 <= level <= maximum or not 0 <= exp <= 9_999_999:
+            return messagebox.showwarning("输入错误", f"该能力等级范围为 0–{maximum}，经验范围为 0–9999999。")
+        hero = self.all_characters.get("100401")
+        if not isinstance(hero, dict):
+            return messagebox.showwarning("无法修改", "此存档没有找到主角数据。")
+        props = hero.setdefault("m_additionProps", {})
+        props[key] = level
+        props["能力经验_" + key[len("能力_") :]] = int(exp) if exp.is_integer() else exp
+        self.refresh_life_abilities()
+        self.status.set("主角生活能力已在内存中修改；点击“保存角色属性”才会写入磁盘。")
 
     def refresh_abilities(self, character: dict) -> None:
         self.ability_tree.delete(*self.ability_tree.get_children())
@@ -528,6 +650,9 @@ class Editor(tk.Tk):
             folder = self.root_path / self.slot.get(); backup = self.root_path / "_EditorBackups" / f"{self.slot.get()}_{datetime.now():%Y%m%d_%H%M%S}"
             backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
             if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
+            elif target == "global":
+                es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
+                es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
             elif target in {"characters", "relations"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
             else: es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
             self.status.set(f"已保存并回读校验。完整备份：{backup}")

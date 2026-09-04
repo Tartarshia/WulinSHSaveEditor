@@ -173,3 +173,54 @@ def load_kungfu_catalog(game_root: Path) -> dict[int, tuple[str, int]]:
             if result:
                 return result
     raise RuntimeError("游戏 ModEditor 中没有找到 KungfuData 武功表")
+
+
+def load_life_ability_catalog(game_root: Path) -> dict[str, int]:
+    """Return player life-ability property key -> official maximum level."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "GameEnvConstData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[str, int] = {}
+            for row in workbook["GameEnvConstData"].iter_rows(values_only=True):
+                if len(row) < 4 or not isinstance(row[2], str) or not row[2].startswith("能力_") or not row[2].endswith("Max"):
+                    continue
+                ability_key = row[2][:-3]
+                if ability_key.count("_") != 2:
+                    continue
+                try:
+                    result[ability_key] = int(row[3])
+                except (TypeError, ValueError):
+                    continue
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到主角生活能力上限表")
+
+
+def load_jianghu_experience_max(game_root: Path) -> int:
+    """Read the Jianghu Knowledge pool cap from the installed game table."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "GameEnvConstData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            for row in workbook["GameEnvConstData"].iter_rows(values_only=True):
+                if len(row) >= 4 and row[2] == "江湖历练AddMax":
+                    try:
+                        maximum = int(row[3])
+                    except (TypeError, ValueError):
+                        break
+                    workbook.close()
+                    return maximum
+            workbook.close()
+    raise RuntimeError("游戏 ModEditor 中没有找到江湖历练上限")
