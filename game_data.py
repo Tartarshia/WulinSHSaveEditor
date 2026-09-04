@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+import re
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
@@ -224,3 +225,55 @@ def load_jianghu_experience_max(game_root: Path) -> int:
                     return maximum
             workbook.close()
     raise RuntimeError("游戏 ModEditor 中没有找到江湖历练上限")
+
+
+def load_recipe_catalog(game_root: Path) -> dict[int, str]:
+    """Return active recipe ID -> name, excluding rows marked skip by the game data."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "NewRecipeData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[int, str] = {}
+            for remark, recipe_id, name in workbook["NewRecipeData"].iter_rows(min_row=4, min_col=1, max_col=3, values_only=True):
+                if remark == "skip":
+                    continue
+                try:
+                    recipe_id = int(recipe_id)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(name, str) and name:
+                    result[recipe_id] = name
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到有效配方表")
+
+
+def load_team_stamina_bonuses(game_root: Path) -> dict[str, float]:
+    """Return Buff data ID -> additive team-stamina-cap bonus from game data."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    pattern = re.compile(r"队伍体力Max@团队\|(-?\d+(?:\.\d+)?)")
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "BuffData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[str, float] = {}
+            for row in workbook["BuffData"].iter_rows(min_row=4, values_only=True):
+                if len(row) < 3 or not isinstance(row[2], str):
+                    continue
+                bonus = sum(float(match.group(1)) for value in row if isinstance(value, str) for match in pattern.finditer(value))
+                if bonus:
+                    result[row[2]] = bonus
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到队伍体力上限 Buff 数据")

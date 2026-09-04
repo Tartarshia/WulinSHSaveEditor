@@ -7,12 +7,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import es3_codec
-from game_data import load_character_names, load_faction_names, load_item_catalog, load_job_factions, load_kungfu_catalog, load_life_ability_catalog, load_jianghu_experience_max
+from game_data import load_character_names, load_faction_names, load_item_catalog, load_job_factions, load_kungfu_catalog, load_life_ability_catalog, load_jianghu_experience_max, load_recipe_catalog, load_team_stamina_bonuses
 from paths import discover_game_roots, discover_save_roots, is_game_root, is_save_root, load_preferences, save_preferences
 
 TEAM_FILE = "SaveObjectPlayerTeam.save"
 CHAR_FILE = "SaveObjectGameCharacter.save"
 FACTION_FILE = "SaveObjectFaction.save"
+TIME_FILE = "SaveObjectGameTime.save"
 class Editor(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -37,11 +38,14 @@ class Editor(tk.Tk):
         self.job_factions: dict[int, str] = {}
         self.kungfu_catalog: dict[int, tuple[str, int]] = {}
         self.life_ability_catalog: dict[str, int] = {}
+        self.recipe_catalog: dict[int, str] = {}
+        self.team_stamina_bonuses: dict[str, float] = {}
         self.jianghu_experience_max = 1_000_000
         self.hero_current_name = ""
         self.team_data = None
         self.char_data = None
         self.faction_data = None
+        self.time_data = None
         self.inventory = None
         self.all_characters: dict[str, dict] = {}
         self.characters: dict[str, dict] = {}
@@ -50,6 +54,8 @@ class Editor(tk.Tk):
         self.ability_level = tk.StringVar(); self.ability_exp = tk.StringVar()
         self.life_ability_level = tk.StringVar(); self.life_ability_exp = tk.StringVar()
         self.jianghu_experience = tk.StringVar(); self.global_book_summary = tk.StringVar(value="读取存档后显示武功秘籍统计。")
+        self.recipe_summary = tk.StringVar(value="读取存档后显示配方统计。")
+        self.money = tk.StringVar(); self.stamina = tk.StringVar(); self.mood = tk.StringVar(); self.survival_day = tk.StringVar()
         self._build()
         self.reload_slots()
 
@@ -124,6 +130,19 @@ class Editor(tk.Tk):
         self.catalog_tree.pack(side="left", fill="x", expand=True); catalog_scroll.pack(side="right", fill="y")
         self.catalog_tree.bind("<<TreeviewSelect>>", self.pick_catalog)
 
+    def _scrollable_content(self, parent: ttk.Frame) -> ttk.Frame:
+        """Create a vertically scrollable form area and return its content frame."""
+        outer = ttk.Frame(parent); outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
+        content = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        return content
+
     def _characters(self, parent: ttk.Frame) -> None:
         left = ttk.Frame(parent); left.pack(side="left", fill="y")
         self.char_tree = ttk.Treeview(left, columns=("name", "status", "id", "level"), show="headings", height=24)
@@ -139,10 +158,13 @@ class Editor(tk.Tk):
         pages.add(kungfu_page, text="已学武功")
 
         ttk.Label(props_page, text="包含出战、已入队未出战和曾入队已离队角色；仅修改基础属性，不碰剧情状态、好感、任务或成就。").pack(anchor="w")
-        self.prop_tree = ttk.Treeview(props_page, columns=("name", "value"), show="headings")
+        prop_box = ttk.Frame(props_page); prop_box.pack(fill="both", expand=True, pady=8)
+        self.prop_tree = ttk.Treeview(prop_box, columns=("name", "value"), show="headings")
         self.prop_tree.heading("name", text="属性"); self.prop_tree.heading("value", text="数值")
         self.prop_tree.column("name", width=350); self.prop_tree.column("value", width=120)
-        self.prop_tree.pack(fill="both", expand=True, pady=8)
+        prop_scroll = ttk.Scrollbar(prop_box, orient="vertical", command=self.prop_tree.yview)
+        self.prop_tree.configure(yscrollcommand=prop_scroll.set)
+        self.prop_tree.pack(side="left", fill="both", expand=True); prop_scroll.pack(side="right", fill="y")
         bar = ttk.Frame(props_page); bar.pack(fill="x")
         ttk.Label(bar, text="新数值").pack(side="left")
         self.prop_value = tk.StringVar(); ttk.Entry(bar, textvariable=self.prop_value, width=12).pack(side="left", padx=4)
@@ -189,19 +211,45 @@ class Editor(tk.Tk):
         ttk.Button(ability_bar, text="修改选中武功", command=self.set_ability).pack(side="left", padx=4)
 
     def _global(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="全局修改只在内存中变更；点击本页“保存全局修改”后才会备份并写入存档。").pack(anchor="w")
-        books = ttk.LabelFrame(parent, text="武功秘籍", padding=12); books.pack(fill="x", pady=(12, 8))
+        content = self._scrollable_content(parent)
+        ttk.Label(content, text="全局修改只在内存中变更；点击本页“保存全局修改”后才会备份并写入存档。").pack(anchor="w")
+        money = ttk.LabelFrame(content, text="铜钱", padding=10); money.pack(fill="x", pady=(10, 4))
+        ttk.Label(money, text="铜钱数值").pack(side="left")
+        ttk.Entry(money, textvariable=self.money, width=14).pack(side="left", padx=8)
+        ttk.Button(money, text="修改铜钱", command=self.set_money).pack(side="left")
+
+        books = ttk.LabelFrame(content, text="武功秘籍", padding=12); books.pack(fill="x", pady=(12, 8))
         ttk.Label(books, textvariable=self.global_book_summary).pack(anchor="w")
         ttk.Label(books, text="仅添加背包中尚未拥有的官方武功秘籍；已有的秘籍及其数量不会改动。").pack(anchor="w", pady=(4, 8))
         ttk.Button(books, text="一键添加未拥有的武功秘籍", command=self.add_missing_kungfu_books).pack(anchor="w")
 
-        knowledge = ttk.LabelFrame(parent, text="江湖历练", padding=12); knowledge.pack(fill="x", pady=8)
+        recipes = ttk.LabelFrame(content, text="配方", padding=10); recipes.pack(fill="x", pady=4)
+        ttk.Label(recipes, textvariable=self.recipe_summary).pack(anchor="w")
+        ttk.Button(recipes, text="一键解锁未学配方", command=self.unlock_missing_recipes).pack(anchor="w", pady=(6, 0))
+
+        stamina = ttk.LabelFrame(content, text="队伍体力与心情", padding=10); stamina.pack(fill="x", pady=4)
+        ttk.Label(stamina, text="体力").pack(side="left")
+        ttk.Entry(stamina, textvariable=self.stamina, width=10).pack(side="left", padx=8)
+        ttk.Button(stamina, text="修改体力", command=self.set_stamina).pack(side="left")
+        self.stamina_limit_label = ttk.Label(stamina, text="读取存档后显示上限。"); self.stamina_limit_label.pack(side="left", padx=(8, 16))
+        ttk.Label(stamina, text="心情").pack(side="left")
+        ttk.Entry(stamina, textvariable=self.mood, width=10).pack(side="left", padx=8)
+        ttk.Button(stamina, text="修改心情", command=self.set_mood).pack(side="left")
+        ttk.Button(stamina, text="体力与心情全满", command=self.fill_team_state).pack(side="left", padx=8)
+
+        knowledge = ttk.LabelFrame(content, text="江湖历练", padding=12); knowledge.pack(fill="x", pady=8)
         ttk.Label(knowledge, text="经验池数值（可用于提升角色和武功等级）").pack(side="left")
         ttk.Entry(knowledge, textvariable=self.jianghu_experience, width=14).pack(side="left", padx=8)
         ttk.Button(knowledge, text="修改江湖历练", command=self.set_jianghu_experience).pack(side="left")
         self.jianghu_limit_label = ttk.Label(knowledge, text="读取存档后显示上限。"); self.jianghu_limit_label.pack(side="left", padx=12)
 
-        ttk.Button(parent, text="保存全局修改", command=lambda: self.save("global")).pack(anchor="e", pady=(12, 0))
+        time_box = ttk.LabelFrame(content, text="游戏时间", padding=10); time_box.pack(fill="x", pady=4)
+        ttk.Label(time_box, text="总存活天数（仅可向前推进）").pack(side="left")
+        ttk.Entry(time_box, textvariable=self.survival_day, width=10).pack(side="left", padx=8)
+        ttk.Button(time_box, text="修改存活天数", command=self.set_survival_day).pack(side="left")
+        ttk.Button(time_box, text="设为第 100 日", command=lambda: self.set_survival_day(100)).pack(side="left", padx=8)
+
+        ttk.Button(content, text="保存全局修改", command=lambda: self.save("global")).pack(anchor="e", pady=(12, 0))
 
     def _relations(self, parent: ttk.Frame) -> None:
         notebook = ttk.Notebook(parent); notebook.pack(fill="both", expand=True)
@@ -298,6 +346,7 @@ class Editor(tk.Tk):
             self.team_data = es3_codec.load(folder / TEAM_FILE)
             self.char_data = es3_codec.load(folder / CHAR_FILE)
             self.faction_data = es3_codec.load(folder / FACTION_FILE)
+            self.time_data = es3_codec.load(folder / TIME_FILE)
             team = self.team_data["Data"]["value"]
             self.inventory = team["playerTeamInventory"]["contents"]
             if not self.item_names:
@@ -315,6 +364,10 @@ class Editor(tk.Tk):
                 self.kungfu_catalog = load_kungfu_catalog(self.game_root)
             if not self.life_ability_catalog:
                 self.life_ability_catalog = load_life_ability_catalog(self.game_root)
+            if not self.recipe_catalog:
+                self.recipe_catalog = load_recipe_catalog(self.game_root)
+            if not self.team_stamina_bonuses:
+                self.team_stamina_bonuses = load_team_stamina_bonuses(self.game_root)
             self.jianghu_experience_max = load_jianghu_experience_max(self.game_root)
             all_characters = self.char_data["Data"]["value"]["createdCharacter"]
             self.all_characters = all_characters
@@ -398,9 +451,48 @@ class Editor(tk.Tk):
         owned = {item.get("m_templeteId") for item in self.inventory or []}
         missing = book_ids - owned
         self.global_book_summary.set(f"官方武功秘籍：{len(book_ids)} 件；背包已有：{len(book_ids & owned)} 件；可补齐：{len(missing)} 件。")
+        learned = set((self.team_data or {}).get("Data", {}).get("value", {}).get("learntRecipes", []))
+        self.recipe_summary.set(f"官方有效配方：{len(self.recipe_catalog)} 个；已学：{len(learned & set(self.recipe_catalog))} 个；可解锁：{len(set(self.recipe_catalog) - learned)} 个。")
+        team = (self.team_data or {}).get("Data", {}).get("value", {})
+        self.money.set(str(team.get("playerTeamInventory", {}).get("currencies", {}).get("0", 0)))
+        self.stamina.set(str(team.get("teamProps", {}).get("队伍体力", 0)))
+        self.mood.set(str(team.get("teamProps", {}).get("队伍心情", 0)))
+        self.stamina_limit_label.configure(text=f"当前体力上限：{self.team_stamina_max():g}")
         hero = self.all_characters.get("100401", {})
         self.jianghu_experience.set(str(hero.get("m_additionProps", {}).get("江湖历练", 0)))
         self.jianghu_limit_label.configure(text=f"游戏当前版本上限：{self.jianghu_experience_max:,}")
+        time_state = (self.time_data or {}).get("Data", {}).get("value", {})
+        self.survival_day.set(str(int(float(time_state.get("TotalQuaterPassed", 0)) // 96) + 1))
+
+    def team_stamina_max(self) -> float:
+        if self.team_data is None:
+            return 100
+        team = self.team_data["Data"]["value"]
+        buff_libraries = [team.get("teamBuffLib", {})]
+        for character_id in team.get("playerTeam", []):
+            character = self.all_characters.get(str(character_id))
+            if isinstance(character, dict):
+                buff_libraries.append(character.get("buffLib", {}))
+        bonuses = 0.0
+        for library in buff_libraries:
+            for buff in library.get("buffInstances", []):
+                if buff.get("isValid"):
+                    bonuses += self.team_stamina_bonuses.get(buff.get("dataId"), 0)
+        return max(0, 100 + bonuses)
+
+    def set_money(self) -> None:
+        if self.team_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        try:
+            value = int(self.money.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "铜钱必须是整数。")
+        if not 0 <= value <= 9_999_999:
+            return messagebox.showwarning("输入错误", "铜钱范围为 0–9999999。")
+        inventory = self.team_data["Data"]["value"]["playerTeamInventory"]
+        inventory.setdefault("currencies", {})["0"] = value
+        self.refresh_global()
+        self.status.set("铜钱已在内存中修改；点击“保存全局修改”才会写入磁盘。")
 
     def add_missing_kungfu_books(self) -> None:
         if self.inventory is None:
@@ -415,6 +507,61 @@ class Editor(tk.Tk):
         self.inventory.extend({"m_templeteId": item_id, "m_stack": 1, "modifyData": None, "IsNew": False, "IsForbidden": False} for item_id in missing)
         self.refresh_items(); self.refresh_global()
         self.status.set(f"已在内存中补齐 {len(missing)} 件未拥有的武功秘籍；点击“保存全局修改”才会写入磁盘。")
+
+    def unlock_missing_recipes(self) -> None:
+        if self.team_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        learned = self.team_data["Data"]["value"].setdefault("learntRecipes", [])
+        missing = sorted(set(self.recipe_catalog) - set(learned))
+        if not missing:
+            return messagebox.showinfo("无需解锁", "已经学会全部官方有效配方。")
+        if not messagebox.askyesno("确认解锁", f"将解锁 {len(missing)} 个尚未学会的官方有效配方；已学配方不变，停用配方不会写入。之后仍需点击“保存全局修改”才会写入磁盘。继续？"):
+            return
+        learned.extend(missing)
+        self.refresh_global()
+        self.status.set(f"已在内存中解锁 {len(missing)} 个未学配方；点击“保存全局修改”才会写入磁盘。")
+
+    def set_stamina(self, target: int | None = None) -> None:
+        if self.team_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        try:
+            value = target if target is not None else int(self.stamina.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "队伍体力必须是整数。")
+        maximum = self.team_stamina_max()
+        if not 0 <= value <= maximum:
+            return messagebox.showwarning("输入错误", f"队伍体力范围为 0–{maximum:g}。")
+        team = self.team_data["Data"]["value"]
+        team.setdefault("teamProps", {})["队伍体力"] = value
+        team["storedStaminaOdd"] = 0
+        time_state = (self.time_data or {}).get("Data", {}).get("value", {})
+        team["lastStaminaTickByQuarter"] = float(time_state.get("TotalQuaterPassed", team.get("lastStaminaTickByQuarter", 0)))
+        self.refresh_global()
+        self.status.set("队伍体力已在内存中修改；点击“保存全局修改”才会写入磁盘。")
+
+    def set_mood(self, target: int | None = None) -> None:
+        if self.team_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        try:
+            value = target if target is not None else int(self.mood.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "队伍心情必须是整数。")
+        if not 0 <= value <= 100:
+            return messagebox.showwarning("输入错误", "队伍心情范围为 0–100。")
+        team = self.team_data["Data"]["value"]
+        team.setdefault("teamProps", {})["队伍心情"] = value
+        time_state = (self.time_data or {}).get("Data", {}).get("value", {})
+        team["lastMoodCheckedTime"] = float(time_state.get("TotalQuaterPassed", team.get("lastMoodCheckedTime", 0)))
+        team["nextMoodStaminaDec"] = 0
+        self.refresh_global()
+        self.status.set("队伍心情已在内存中修改；点击“保存全局修改”才会写入磁盘。")
+
+    def fill_team_state(self) -> None:
+        if self.team_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        self.set_stamina(int(self.team_stamina_max()))
+        self.set_mood(100)
+        self.status.set("队伍体力与心情已在内存中补满；点击“保存全局修改”才会写入磁盘。")
 
     def set_jianghu_experience(self) -> None:
         if self.char_data is None:
@@ -431,6 +578,42 @@ class Editor(tk.Tk):
         hero.setdefault("m_additionProps", {})["江湖历练"] = value
         self.refresh_global()
         self.status.set("江湖历练已在内存中修改；点击“保存全局修改”才会写入磁盘。")
+
+    def set_survival_day(self, target: int | None = None) -> None:
+        if self.time_data is None:
+            return messagebox.showwarning("尚未读取", "请先读取存档。")
+        try:
+            requested_day = target if target is not None else int(self.survival_day.get())
+        except ValueError:
+            return messagebox.showwarning("输入错误", "存活天数必须是整数。")
+        time_state = self.time_data["Data"]["value"]
+        old_total = float(time_state.get("TotalQuaterPassed", 0))
+        current_day = int(old_total // 96) + 1
+        if requested_day < current_day:
+            return messagebox.showwarning("无法倒退", f"当前已是第 {current_day} 日；时间编辑仅支持向前推进。")
+        day_index = requested_day - 1
+        time_of_day = old_total % 96
+        new_total = day_index * 96 + time_of_day
+        year, day_of_year = divmod(day_index, 360)
+        month, day_in_month = divmod(day_of_year, 30)
+        time_state["TotalQuaterPassed"] = new_total
+        time_state["Year"] = year
+        time_state["Month"] = month + 1
+        time_state["Day"] = day_in_month + 1
+        time_state["totalYearChanged"] = year
+        time_state["totalSecsTimeYear"] = day_of_year * 86400 + time_of_day * 900
+        time_state["QuaterOfDay"] = time_of_day
+        time_state["Dhour"] = int(time_of_day) // 8
+        time_state["Quarter"] = int(time_of_day) % 8
+        time_state["IsDaylight"] = 32 <= time_of_day < 80
+        start_ticks = time_state.get("simulationStartTime", {}).get("ticks")
+        if isinstance(start_ticks, int):
+            time_state.setdefault("simulatedTime", {})["ticks"] = start_ticks + int(new_total * 900 * 10_000_000)
+        team = self.team_data["Data"]["value"]
+        team["lastStaminaTickByQuarter"] = new_total
+        team["lastMoodCheckedTime"] = new_total
+        self.refresh_global()
+        self.status.set(f"游戏时间已推进至第 {requested_day} 日；点击“保存全局修改”才会写入磁盘。")
 
     def refresh_characters(self) -> None:
         self.char_tree.delete(*self.char_tree.get_children())
@@ -653,6 +836,7 @@ class Editor(tk.Tk):
             elif target == "global":
                 es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
                 es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
+                es3_codec.atomic_write(folder / TIME_FILE, self.time_data)
             elif target in {"characters", "relations"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
             else: es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
             self.status.set(f"已保存并回读校验。完整备份：{backup}")
