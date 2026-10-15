@@ -6,6 +6,22 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_departed_location_uses_saved_current_map_not_leave_or_respawn(self):
+        self.state.map_names = {1: "测试当前地图", 2: "测试离队地图"}
+        char = {"m_curMapId": 1, "m_curPos": {"x": 3, "y": 4}, "m_RespawnMap": 999, "m_TeamMemberState": {"isJoined": False, "leaveTeamMap": 2}}
+        original = copy.deepcopy(char)
+        location = self.state.character_location(char)
+        self.assertEqual(location["name"], "测试当前地图")
+        self.assertEqual(location["source"], "存档所在地")
+        self.assertEqual(location["pos"], {"x": 3, "y": 4})
+        self.assertEqual(char, original)
+        char["m_curMapId"] = 0
+        self.assertEqual(self.state.character_location(char)["source"], "上次离队地点")
+        self.assertEqual(self.state.character_location({"m_curMapId": 999})["name"], "未知地图 999")
+        self.assertIsNone(self.state.character_location({})["map_id"])
+        char["m_isAlive"] = False
+        self.assertIn("已死亡", self.state.character_location(char)["source"])
+
     def test_description_reader_uses_validated_simplified_chinese_fields(self):
         import struct
         def string(value): return b"\x01" + struct.pack("<i", len(value)) + value.encode("utf-16-le")

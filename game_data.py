@@ -17,7 +17,7 @@ def plain_game_text(value: str) -> str:
     return re.sub(r"</?(?:color|size|b|i|u|sprite|link|align|indent|line-height|font|voffset)\b[^>]*>|<#[0-9a-fA-F]{6,8}>", "", value).strip()
 
 
-def read_localized_item_info(raw: bytes) -> dict[str, str]:
+def read_localized_item_info(raw: bytes, prefix: str = "ItemInfo_") -> dict[str, str]:
     """Read only validated named Odin string fields, not the entire game graph."""
     key_marker = b"\x27\x01\x05\x00\x00\x00" + "UName".encode("utf-16-le")
     chinese_marker = b"\x27\x01\x08\x00\x00\x00" + "SChinese".encode("utf-16-le")
@@ -33,22 +33,26 @@ def read_localized_item_info(raw: bytes) -> dict[str, str]:
     for match in re.finditer(re.escape(key_marker), raw):
         try: key, offset = string_at(match.end())
         except (ValueError, UnicodeError): continue
-        if not key.startswith("ItemInfo_"): continue
+        if not key.startswith(prefix): continue
         if raw[offset:offset + len(chinese_marker)] != chinese_marker: continue
         value, _ = string_at(offset + len(chinese_marker))
-        result[key.removeprefix("ItemInfo_")] = plain_game_text(value)
+        result[key.removeprefix(prefix)] = plain_game_text(value)
     if not result: raise ValueError("未找到游戏物品中文说明")
     return result
 
 
-def load_item_descriptions(game_root: Path) -> dict[int, str]:
+def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = None) -> dict[int, str]:
     import UnityPy
     bundle = game_root / "Wulin_Data/StreamingAssets/aa/StandaloneWindows64/config_assets_all.bundle"
     env = UnityPy.load(str(bundle))
     localized = None
     for obj in env.objects:
         if obj.type.name == "MonoBehaviour" and obj.peek_name() == "LocData":
-            localized = read_localized_item_info(obj.get_raw_data())
+            raw = obj.get_raw_data()
+            localized = read_localized_item_info(raw)
+            if map_names is not None:
+                for key, name in read_localized_item_info(raw, "MapName_").items():
+                    if key.isdigit() and name: map_names[int(key)] = name
             break
     if localized is None: raise ValueError("游戏资源包中未找到 LocData 物品说明")
     del env

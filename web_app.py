@@ -52,6 +52,7 @@ class EditorState:
         self.time_data: dict | None = None
         self.item_catalog: dict[int, tuple[str, str]] = {}
         self.item_descriptions: dict[int, str] = {}
+        self.map_names: dict[int, str] = {}
         self.book_catalog: dict[int, dict] = {}
         self.consumable_catalog: dict[int, dict] = {}
         self.material_catalog: dict[int, dict] = {}
@@ -124,6 +125,7 @@ class EditorState:
             self.team_data = self.char_data = self.faction_data = self.time_data = None
         if changed_game:
             self.item_descriptions = {}
+            self.map_names = {}
             self.consumable_catalog = {}
             self.material_catalog = {}
             self.treasure_catalog = {}
@@ -139,7 +141,7 @@ class EditorState:
         if not self.item_catalog:
             self.item_catalog = load_item_catalog(self.game_root)
         if not self.item_descriptions:
-            self.item_descriptions = load_item_descriptions(self.game_root)
+            self.item_descriptions = load_item_descriptions(self.game_root, self.map_names)
         if not self.book_catalog:
             self.book_catalog = load_book_catalog(self.game_root)
         if not self.consumable_catalog:
@@ -408,8 +410,24 @@ class EditorState:
             state = char.get("m_TeamMemberState")
             if cid in active or isinstance(state, dict):
                 status = "出战中" if cid in active else ("已入队，未出战" if state.get("isJoined") else "曾入队，现已离队")
-                rows.append({"id": cid, "name": self.name(char), "status": status, "level": char.get("m_level", 0)})
+                rows.append({"id": cid, "name": self.name(char), "status": status, "level": char.get("m_level", 0), "location": self.character_location(char) if cid not in active and not state.get("isJoined") else None})
         return sorted(rows, key=lambda x: (x["status"] != "出战中", x["name"], int(x["id"])))
+
+    def character_location(self, char: dict) -> dict:
+        """Read saved position, never confuse respawn/leave points with current map."""
+        team_state = char.get("m_TeamMemberState") or {}
+        def valid_map(value):
+            try: value = int(value)
+            except (TypeError, ValueError): return None
+            return value if value > 0 else None
+        map_id = valid_map(char.get("m_curMapId"))
+        source, pos = "存档所在地", char.get("m_curPos")
+        if map_id is None:
+            map_id = valid_map(team_state.get("leaveTeamMap"))
+            source, pos = "上次离队地点", team_state.get("leaveTeamPos")
+        if map_id is None: return {"name": "存档未记录位置", "map_id": None, "source": "位置", "pos": None}
+        if char.get("m_isAlive") is False: source = "已死亡 · 最后记录位置"
+        return {"name": getattr(self, "map_names", {}).get(map_id, f"未知地图 {map_id}"), "map_id": map_id, "source": source, "pos": {key: pos[key] for key in ("x", "y") if key in pos} if isinstance(pos, dict) else None}
 
     def affinities(self, sex: str) -> dict:
         self.require_loaded()
@@ -457,7 +475,9 @@ class EditorState:
             for key, maximum in sorted(self.life_catalog.items()):
                 _, category, name = key.split("_", 2); exp_key = "能力经验_" + key[len("能力_"):]
                 life.append({"key": key, "category": category, "name": name, "level": addition.get(key, 0), "max": maximum, "exp": addition.get(exp_key, 0)})
-        return {"id": cid, "name": self.name(char), "level": char.get("m_level", 1), "exp": char.get("m_exp", 0), "props": props, "innate": innate, "morals": morals, "kungfu": kungfu, "life": life}
+        team_state = char.get("m_TeamMemberState")
+        departed = isinstance(team_state, dict) and not team_state.get("isJoined") and cid not in {str(x) for x in self.team.get("playerTeam", [])}
+        return {"id": cid, "name": self.name(char), "location": self.character_location(char) if departed else None, "level": char.get("m_level", 1), "exp": char.get("m_exp", 0), "props": props, "innate": innate, "morals": morals, "kungfu": kungfu, "life": life}
 
     def set_character(self, cid: str, payload: dict) -> None:
         self.require_loaded()
