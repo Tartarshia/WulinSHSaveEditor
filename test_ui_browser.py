@@ -79,6 +79,8 @@ class BrowserUiTests(unittest.TestCase):
                 data = dict(rows=[dict(id=5, name="测试材料", group="药材", rarity=1, count=0, description="测试说明")], total=1)
             elif path == "/api/items":
                 data = dict(items=[], categories=["全部"])
+            elif path == "/api/catalog":
+                data = []
             elif path == "/api/characters":
                 data = dict(characters=[dict(id=str(1000 + i), name=f"测试角色{i}", status="已入队，未出战", level=1) for i in range(40)])
             elif path.startswith("/api/characters/"):
@@ -118,11 +120,24 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
             toggle.click()
             self.assertTrue(page.locator("#consumableGroups .item-description").first.is_visible())
-            for tab in ["books", "recipes", "materials", "treasures", "life"]:
+            for tab in ["books", "recipes", "materials", "treasures", "other_stackable", "life"]:
                 page.locator(f'[data-tab="{tab}"]').click()
                 button = page.locator(f"#{tab} .group-toggle").first
                 button.wait_for()
                 self.assertEqual(button.get_attribute("aria-expanded"), "true")
+            old_form = page.locator('#other_stackable .consumable-form').first.element_handle()
+            page.locator('[data-tab="other_stackable"]').click()
+            page.wait_for_function('(el) => !el.isConnected', arg=old_form)
+            form = page.locator('#other_stackable .consumable-form').first
+            form.locator('input').fill('999')
+            with page.expect_request(lambda r: '/api/inventory-groups/other_stackable' in r.url and r.method == 'POST') as changed:
+                form.locator('button').click()
+            self.assertEqual(json.loads(changed.value.post_data), dict(id="5", count="999"))
+            page.locator('[data-tab="items"]').click()
+            self.assertFalse(page.locator('#showItemOtherStackable').is_checked())
+            with page.expect_request(lambda r: '/api/items?' in r.url and 'include_other_stackable=1' in r.url):
+                page.locator('#showItemOtherStackable').check()
+            page.locator('[data-tab="life"]').click()
             page.locator('#life [data-save="life"]').click()
             page.locator('#confirm button[value="ok"]').click()
             page.wait_for_function("() => document.querySelector('#status').textContent.includes('已保存')")
@@ -138,7 +153,7 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(page.locator("#characterDetail h2").first.inner_text(), "测试角色39")
             for width in [1400, 900, 540, 375, 320]:
                 page.set_viewport_size({"width": width, "height": 900})
-                for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "relations", "factions"]:
+                for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "other_stackable", "relations", "factions"]:
                     page.locator(f'[data-tab="{tab}"]').click()
                     page.wait_for_timeout(40)
                     self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), (width, tab))

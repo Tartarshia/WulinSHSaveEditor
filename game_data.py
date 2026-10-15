@@ -507,6 +507,19 @@ def consumable_group(item_type: str, fav_tags: str, default: str) -> str:
     return default
 
 
+def stackable_other_group(item_type: str, name: str, fav_tags: str, stackable) -> str | None:
+    """Only explicitly stackable items; do not treat every quest item as a key."""
+    if str(stackable).strip().casefold() not in {"true", "1"}:
+        return None
+    category = item_category(item_type)
+    if category in {"暗器", "毒物", "杂项"}:
+        return category
+    tags = {tag.strip() for tag in str(fav_tags or "").split(",")}
+    if category == "任务物品" and ("钥匙" in tags or "钥匙" in name or name.endswith("钥")):
+        return "钥匙"
+    return None
+
+
 def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dict[int, dict]:
     groups = {"Consumeable_Edible_Meal": "食物与酒水", "Consumeable_Edible_Medicine": "药品",
               "Consumeable_Edible_Fruit": "水果", "Consumeable_Edible_Elixir": "丹药",
@@ -526,10 +539,13 @@ def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dic
             result = {}
             for row in workbook["ItemData"].iter_rows(min_row=4, min_col=2, max_col=25, values_only=True):
                 item_type = str(row[8] or "")
-                if item_category(item_type) != category: continue
+                other_group = stackable_other_group(item_type, str(row[1] or ""), row[23], row[5]) if category == "其他（可堆叠）" else None
+                if category == "其他（可堆叠）":
+                    if not other_group: continue
+                elif item_category(item_type) != category: continue
                 try: item_id, rarity = int(row[0]), int(row[3])
                 except (TypeError, ValueError): continue
-                group = consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
+                group = other_group or consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
                 result[item_id] = {"rarity": rarity, "group": group}
             workbook.close()
             if result: return result

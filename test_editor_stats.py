@@ -2,10 +2,42 @@ import copy
 import unittest
 
 from web_app import EditorState
-from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat
+from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat, stackable_other_group
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_other_stackable_classification_requires_explicit_flag(self):
+        for flag in (True, "TRUE", " true ", 1):
+            self.assertEqual(stackable_other_group("Misc_HidWep", "飞镖", "", flag), "暗器")
+        for flag in (False, "FALSE", None, "", 0):
+            self.assertIsNone(stackable_other_group("Misc_Quest", "铜钥匙", "钥匙", flag))
+        self.assertEqual(stackable_other_group("Misc_Poison", "毒物", "", "TRUE"), "毒物")
+        self.assertEqual(stackable_other_group("Misc", "杂物", "", "TRUE"), "杂项")
+        for name, tags in (("铜钥匙", ""), ("藏宝密窟钥", ""), ("任务道具", "钥匙")):
+            self.assertEqual(stackable_other_group("Misc_Quest", name, tags, "TRUE"), "钥匙")
+        self.assertIsNone(stackable_other_group("Misc_Quest", "信件", "任务", "TRUE"))
+        self.assertIsNone(stackable_other_group("None", "停用物品", "", "TRUE"))
+
+    def test_other_stackable_subset_filters_and_quantity(self):
+        self.state.item_catalog.update({10: ("铜钥匙", "任务物品"), 11: ("信件", "任务物品"), 12: ("不可堆叠杂物", "杂项")})
+        self.state.other_stackable_catalog = {10: {"rarity": 1, "group": "钥匙"}}
+        self.state.inventory.extend([{"m_templeteId": i, "m_stack": 1} for i in (10, 11, 12, 10)])
+        original = copy.deepcopy(self.state.inventory)
+        self.assertEqual([x["id"] for x in self.state.items()["items"]], [11, 12])
+        self.assertEqual([x["id"] for x in self.state.items(include_other_stackable=True)["items"]], [10, 10, 11, 12])
+        self.assertEqual([x["id"] for x in self.state.catalog("")], [11, 12])
+        self.assertIn(10, [x["id"] for x in self.state.catalog("", include_other_stackable=True)])
+        self.assertIn("任务物品", self.state.items()["categories"])
+        self.assertEqual(self.state.inventory, original)
+        self.assertEqual(self.state.inventory_group("other_stackable")["rows"][0]["count"], 2)
+        self.state.set_inventory_group_count("other_stackable", 10, 999)
+        self.assertEqual(self.state.inventory_group("other_stackable", status="owned")["rows"][0]["count"], 999)
+        for rejected in (11, 12):
+            with self.assertRaises(ValueError): self.state.set_inventory_group_count("other_stackable", rejected, 999)
+        self.state.set_inventory_group_count("other_stackable", 10, 0)
+        self.assertEqual(self.state.inventory_group("other_stackable", status="missing")["rows"][0]["count"], 0)
+        self.assertEqual([x for x in self.state.inventory if x["m_templeteId"] in (11, 12)], original[4:6])
+
     def test_reserve_members_show_homestead_rooms_without_guessing_all_are_home(self):
         self.state.map_names = {502: "天工坊", 1100: "无名小村"}
         self.state.team["playerTeam"] = [100401]
@@ -162,6 +194,7 @@ class EditorStatsTests(unittest.TestCase):
         self.state.consumable_catalog = {3: {"rarity": 1, "group": "药品"}}
         self.state.life_catalog = {}
         self.state.material_catalog = {8: {"rarity": 2, "group": "药材"}}
+        self.state.other_stackable_catalog = {}
         self.state.treasure_catalog = {9: {"rarity": 3, "group": "古董"}}
         self.state.time_data = {"Data": {"value": {}}}
         self.state.char_data = {"Data": {"value": {"createdCharacter": {"100401": {

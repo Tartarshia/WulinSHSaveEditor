@@ -57,6 +57,7 @@ class EditorState:
         self.consumable_catalog: dict[int, dict] = {}
         self.material_catalog: dict[int, dict] = {}
         self.treasure_catalog: dict[int, dict] = {}
+        self.other_stackable_catalog: dict[int, dict] = {}
         self.character_names: dict[int, str] = {}
         self.character_profiles: dict[int, tuple[str, str]] = {}
         self.affinity_candidates: dict[str, set[int]] = {}
@@ -129,6 +130,7 @@ class EditorState:
             self.consumable_catalog = {}
             self.material_catalog = {}
             self.treasure_catalog = {}
+            self.other_stackable_catalog = {}
             self.main_prop_growth = {}
             self.recipe_details = {}
             self.book_catalog = {}
@@ -150,6 +152,8 @@ class EditorState:
             self.material_catalog = load_consumable_catalog(self.game_root, "材料")
         if not self.treasure_catalog:
             self.treasure_catalog = load_consumable_catalog(self.game_root, "珍宝")
+        if not self.other_stackable_catalog:
+            self.other_stackable_catalog = load_consumable_catalog(self.game_root, "其他（可堆叠）")
         if not self.character_names:
             self.character_names = load_character_names(self.game_root)
         if not self.character_profiles:
@@ -249,7 +253,7 @@ class EditorState:
             result["summary"] = {"items": len(self.inventory), "characters": len(self.characters()), "message": f"已读取 {self.slot}。修改仍只在内存中，保存前不会写入磁盘。"}
         return result
 
-    def items(self, needle: str = "", category: str = "全部", sort: str = "id", include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False) -> dict:
+    def items(self, needle: str = "", category: str = "全部", sort: str = "id", include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False) -> dict:
         self.require_loaded(); needle = needle.casefold().strip()
         rows = []
         for index, item in enumerate(self.inventory):
@@ -258,11 +262,12 @@ class EditorState:
             if item_category == "武功秘籍" and not include_books or item_category == "配方" and not include_recipes: continue
             if item_category == "消耗品" and not include_consumables: continue
             if item_category == "材料" and not include_materials or item_category == "珍宝" and not include_treasures: continue
+            if item_id in self.other_stackable_catalog and not include_other_stackable: continue
             if needle and needle not in str(item_id) and needle not in name.casefold(): continue
             if category != "全部" and item_category != category: continue
             rows.append({"index": index, "id": item_id, "name": name, "description": self.item_description(item_id), "category": item_category, "count": item.get("m_stack", 0), "modified": bool(item.get("modifyData"))})
         rows.sort(key=(lambda x: x["name"]) if sort == "name" else (lambda x: x["id"]), reverse=sort == "id_desc")
-        categories = {v[1] for v in self.item_catalog.values()}
+        categories = {v[1] for k, v in self.item_catalog.items() if include_other_stackable or k not in self.other_stackable_catalog}
         if not include_books: categories.discard("武功秘籍")
         if not include_recipes: categories.discard("配方")
         if not include_consumables: categories.discard("消耗品")
@@ -270,9 +275,9 @@ class EditorState:
         if not include_treasures: categories.discard("珍宝")
         return {"items": rows, "categories": ["全部", *sorted(categories)]}
 
-    def catalog(self, needle: str, include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False) -> list[dict]:
+    def catalog(self, needle: str, include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False) -> list[dict]:
         needle = needle.casefold().strip()
-        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
+        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (include_other_stackable or item_id not in self.other_stackable_catalog) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
 
     def item_description(self, item_id: int) -> str:
         return getattr(self, "item_descriptions", {}).get(item_id, "游戏资料中暂无文字说明。")
@@ -298,7 +303,7 @@ class EditorState:
         return {"rows": rows, "total": len(catalog)}
 
     def quantity_catalog(self, kind: str) -> dict:
-        attributes = {"consumables": "consumable_catalog", "materials": "material_catalog", "treasures": "treasure_catalog"}
+        attributes = {"consumables": "consumable_catalog", "materials": "material_catalog", "treasures": "treasure_catalog", "other_stackable": "other_stackable_catalog"}
         if kind not in attributes: raise ValueError("不支持的物品分类。")
         return getattr(self, attributes[kind])
 
@@ -627,7 +632,7 @@ class EditorState:
         backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
         if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target in {"characters", "relations", "life"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
-        elif target in {"books", "recipes", "consumables", "materials", "treasures"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
+        elif target in {"books", "recipes", "consumables", "materials", "treasures", "other_stackable"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target == "factions": es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
         elif target == "global":
             es3_codec.atomic_write(folder / TEAM_FILE, self.team_data); es3_codec.atomic_write(folder / CHAR_FILE, self.char_data); es3_codec.atomic_write(folder / TIME_FILE, self.time_data)
@@ -688,9 +693,9 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     @app.post("/api/load")
     def api_load(): return respond(lambda: (state.load(body()["slot"]), state.overview())[1])
     @app.get("/api/items")
-    def api_items(): return respond(lambda: state.items(request.args.get("q", ""), request.args.get("category", "全部"), request.args.get("sort", "id"), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1"))
+    def api_items(): return respond(lambda: state.items(request.args.get("q", ""), request.args.get("category", "全部"), request.args.get("sort", "id"), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1"))
     @app.get("/api/catalog")
-    def api_catalog(): return respond(lambda: state.catalog(request.args.get("q", ""), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1"))
+    def api_catalog(): return respond(lambda: state.catalog(request.args.get("q", ""), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1"))
     @app.get("/api/consumables")
     def api_consumables(): return respond(lambda: state.consumables(request.args.get("q", ""), request.args.get("status", "all")))
     @app.post("/api/consumables")
