@@ -80,7 +80,10 @@ class BrowserUiTests(unittest.TestCase):
             elif path == "/api/items":
                 data = dict(items=[], categories=["全部"])
             elif path == "/api/characters":
-                data = dict(characters=[])
+                data = dict(characters=[dict(id=str(1000 + i), name=f"测试角色{i}", status="已入队，未出战", level=1) for i in range(40)])
+            elif path.startswith("/api/characters/"):
+                cid = path.rsplit("/", 1)[-1]
+                data = dict(id=cid, name=f"测试角色{int(cid) - 1000}", level=1, exp=0, props=[], innate=[], morals=[], kungfu=[], life=[], location=None)
             elif path == "/api/life-abilities":
                 data = dict(abilities=[dict(key="能力_采集_采矿", category="采集", name="采矿", level=1, max=5, exp=0)], total=1)
             elif path == "/api/global":
@@ -125,6 +128,14 @@ class BrowserUiTests(unittest.TestCase):
             page.wait_for_function("() => document.querySelector('#status').textContent.includes('已保存')")
             self.assertIn(long_path, page.locator("#status").inner_text())
             self.assertEqual(page.locator("#statusBar #status").count(), 1)
+            page.locator('[data-tab="characters"]').click()
+            characters = page.locator("#characterList")
+            self.assertTrue(characters.evaluate("el => el.scrollHeight > el.clientHeight"))
+            self.assertLess(characters.bounding_box()["height"], 900)
+            self.assertEqual(characters.evaluate("el => getComputedStyle(el).overflowY"), "auto")
+            characters.locator("button").last.click()
+            page.locator("#characterDetail h2").first.wait_for()
+            self.assertEqual(page.locator("#characterDetail h2").first.inner_text(), "测试角色39")
             for width in [1400, 900, 540, 375, 320]:
                 page.set_viewport_size({"width": width, "height": 900})
                 for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "relations", "factions"]:
