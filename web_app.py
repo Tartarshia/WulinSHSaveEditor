@@ -305,6 +305,16 @@ class EditorState:
     def set_consumable_count(self, item_id: int, count: int) -> None:
         self.set_inventory_group_count("consumables", item_id, count)
 
+    def set_experience_books_999(self) -> dict:
+        self.require_loaded()
+        ids = [item_id for item_id, detail in self.consumable_catalog.items() if detail.get("group") == "经验书"]
+        if not ids: raise ValueError("当前游戏资料中没有找到经验书。")
+        if any(self.item_catalog.get(item_id, ("", ""))[1] != "消耗品" for item_id in ids):
+            raise ValueError("经验书目录与物品分类不一致，请重新读取游戏资料。")
+        for item_id in ids:
+            self.set_consumable_count(item_id, 999)
+        return {"count": len(ids), "message": f"已将全部 {len(ids)} 种经验书各设为 999 本（仅内存）；点击保存消耗品后才写入存档。"}
+
     def set_inventory_group_count(self, kind: str, item_id: int, count: int) -> None:
         self.require_loaded()
         if item_id not in self.quantity_catalog(kind): raise ValueError("该 ID 不属于所选官方物品分类。")
@@ -664,6 +674,8 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     def api_consumables(): return respond(lambda: state.consumables(request.args.get("q", ""), request.args.get("status", "all")))
     @app.post("/api/consumables")
     def api_set_consumable(): return respond(lambda: (state.set_consumable_count(int(body()["id"]), int(body()["count"])), {"message": "消耗品数量已在内存中修改。"})[1])
+    @app.post("/api/consumables/experience-books-999")
+    def api_experience_books_999(): return respond(state.set_experience_books_999)
     @app.get("/api/inventory-groups/<kind>")
     def api_inventory_group(kind): return respond(lambda: state.inventory_group(kind, request.args.get("q", ""), request.args.get("status", "all")))
     @app.post("/api/inventory-groups/<kind>")

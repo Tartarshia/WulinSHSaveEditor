@@ -6,6 +6,30 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_experience_books_shortcut_sets_all_to_999_without_touching_other_items(self):
+        self.state.item_catalog.update({4: ("测试经验书甲", "消耗品"), 5: ("测试经验书乙", "消耗品")})
+        self.state.consumable_catalog.update({4: {"group": "经验书"}, 5: {"group": "经验书"}})
+        self.state.inventory.extend([{"m_templeteId": 4, "m_stack": 2000, "modifyData": {"test": 1}}, {"m_templeteId": 4, "m_stack": 7}])
+        unrelated = copy.deepcopy([x for x in self.state.inventory if x["m_templeteId"] != 4])
+        result = self.state.set_experience_books_999()
+        self.assertEqual(result["count"], 2)
+        for item_id in (4, 5):
+            records = [x for x in self.state.inventory if x["m_templeteId"] == item_id]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["m_stack"], 999)
+        self.assertEqual(next(x for x in self.state.inventory if x["m_templeteId"] == 4)["modifyData"], {"test": 1})
+        self.assertEqual([x for x in self.state.inventory if x["m_templeteId"] not in (4, 5)], unrelated)
+        before = copy.deepcopy(self.state.inventory)
+        self.state.set_experience_books_999()
+        self.assertEqual(self.state.inventory, before)
+
+    def test_experience_books_shortcut_validates_catalog_before_mutating(self):
+        before = copy.deepcopy(self.state.inventory)
+        with self.assertRaises(ValueError): self.state.set_experience_books_999()
+        self.state.consumable_catalog.update({3: {"group": "经验书"}, 8: {"group": "经验书"}})
+        with self.assertRaises(ValueError): self.state.set_experience_books_999()
+        self.assertEqual(self.state.inventory, before)
+
     def test_effects_use_localized_names_and_preserve_sign_and_units(self):
         names = {"B_NegBlind": "致盲", "B_NegPoison": "中毒", "生命": "生命上限"}
         self.assertEqual(format_item_stat("D_Hp|2000", names, True), "气血恢复 2000")
