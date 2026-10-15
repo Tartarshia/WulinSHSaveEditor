@@ -16,6 +16,9 @@ class EditorStatsTests(unittest.TestCase):
         for name, tags in (("铜钥匙", ""), ("藏宝密窟钥", ""), ("任务道具", "钥匙")):
             self.assertEqual(stackable_other_group("Misc_Quest", name, tags, "TRUE"), "钥匙")
         self.assertIsNone(stackable_other_group("Misc_Quest", "信件", "任务", "TRUE"))
+        for name in ("三生石", "三义香"):
+            self.assertEqual(stackable_other_group("Misc_Quest", name, "珍品", "TRUE"), "杂项")
+            self.assertIsNone(stackable_other_group("Misc_Quest", name, "珍品", "FALSE"))
         self.assertIsNone(stackable_other_group("None", "停用物品", "", "TRUE"))
 
     def test_other_stackable_subset_filters_and_quantity(self):

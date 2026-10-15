@@ -514,6 +514,8 @@ def stackable_other_group(item_type: str, name: str, fav_tags: str, stackable) -
     category = item_category(item_type)
     if category in {"暗器", "毒物", "杂项"}:
         return category
+    if category == "任务物品" and name in {"三生石", "三义香"}:
+        return "杂项"
     tags = {tag.strip() for tag in str(fav_tags or "").split(",")}
     if category == "任务物品" and ("钥匙" in tags or "钥匙" in name or name.endswith("钥")):
         return "钥匙"
