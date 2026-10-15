@@ -259,7 +259,7 @@ class EditorState:
             result["summary"] = {"items": len(self.inventory), "characters": len(self.characters()), "message": f"已读取 {self.slot}。修改仍只在内存中，保存前不会写入磁盘。"}
         return result
 
-    def items(self, needle: str = "", category: str = "全部", sort: str = "id", include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False) -> dict:
+    def items(self, needle: str = "", category: str = "全部", sort: str = "id", include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False, include_equipment: bool = False) -> dict:
         self.require_loaded(); needle = needle.casefold().strip()
         rows = []
         for index, item in enumerate(self.inventory):
@@ -269,6 +269,7 @@ class EditorState:
             if item_category == "消耗品" and not include_consumables: continue
             if item_category == "材料" and not include_materials or item_category == "珍宝" and not include_treasures: continue
             if item_id in self.other_stackable_catalog and not include_other_stackable: continue
+            if item_category in {"武器", "防具", "饰品"} and not include_equipment: continue
             if needle and needle not in str(item_id) and needle not in name.casefold(): continue
             if category != "全部" and item_category != category: continue
             rows.append({"index": index, "id": item_id, "name": name, "description": self.item_description(item_id), "category": item_category, "count": item.get("m_stack", 0), "modified": bool(item.get("modifyData"))})
@@ -279,11 +280,12 @@ class EditorState:
         if not include_consumables: categories.discard("消耗品")
         if not include_materials: categories.discard("材料")
         if not include_treasures: categories.discard("珍宝")
+        if not include_equipment: categories.difference_update({"武器", "防具", "饰品"})
         return {"items": rows, "categories": ["全部", *sorted(categories)]}
 
-    def catalog(self, needle: str, include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False) -> list[dict]:
+    def catalog(self, needle: str, include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False, include_equipment: bool = False) -> list[dict]:
         needle = needle.casefold().strip()
-        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (include_other_stackable or item_id not in self.other_stackable_catalog) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
+        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (include_equipment or category not in {"武器", "防具", "饰品"}) and (include_other_stackable or item_id not in self.other_stackable_catalog) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
 
     def item_description(self, item_id: int) -> str:
         return getattr(self, "item_descriptions", {}).get(item_id, "游戏资料中暂无文字说明。")
@@ -752,9 +754,9 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     @app.post("/api/load")
     def api_load(): return respond(lambda: (state.load(body()["slot"]), state.overview())[1])
     @app.get("/api/items")
-    def api_items(): return respond(lambda: state.items(request.args.get("q", ""), request.args.get("category", "全部"), request.args.get("sort", "id"), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1"))
+    def api_items(): return respond(lambda: state.items(request.args.get("q", ""), request.args.get("category", "全部"), request.args.get("sort", "id"), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1", request.args.get("include_equipment") == "1"))
     @app.get("/api/catalog")
-    def api_catalog(): return respond(lambda: state.catalog(request.args.get("q", ""), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1"))
+    def api_catalog(): return respond(lambda: state.catalog(request.args.get("q", ""), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1", request.args.get("include_equipment") == "1"))
     @app.get("/api/consumables")
     def api_consumables(): return respond(lambda: state.consumables(request.args.get("q", ""), request.args.get("status", "all")))
     @app.get("/api/equipment")

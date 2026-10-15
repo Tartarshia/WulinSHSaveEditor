@@ -139,6 +139,9 @@ class BrowserUiTests(unittest.TestCase):
             self.assertFalse(page.locator('#showItemOtherStackable').is_checked())
             with page.expect_request(lambda r: '/api/items?' in r.url and 'include_other_stackable=1' in r.url):
                 page.locator('#showItemOtherStackable').check()
+            self.assertFalse(page.locator('#showItemEquipment').is_checked())
+            with page.expect_request(lambda r: '/api/items?' in r.url and 'include_equipment=1' in r.url):
+                page.locator('#showItemEquipment').check()
             page.locator('[data-tab="equipment"]').click()
             page.locator('#equipmentGroups .book-card').first.wait_for()
             self.assertEqual(page.locator('#equipmentGroups .book-card').count(), 4)

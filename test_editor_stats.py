@@ -6,6 +6,20 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_equipment_hidden_by_default_in_items_and_add_catalog(self):
+        for item_id, category in ((31, "武器"), (32, "防具"), (33, "饰品")):
+            self.state.item_catalog[item_id] = ("测试" + category, category)
+            self.state.inventory.append({"m_templeteId": item_id, "m_stack": 1})
+        original = copy.deepcopy(self.state.inventory)
+        self.assertEqual(self.state.items()["items"], [])
+        self.assertEqual(self.state.catalog(""), [])
+        self.assertFalse({"武器", "防具", "饰品"} & set(self.state.items()["categories"]))
+        visible = self.state.items(include_equipment=True)
+        self.assertEqual([x["id"] for x in visible["items"]], [31, 32, 33])
+        self.assertEqual([x["index"] for x in visible["items"]], [3, 4, 5])
+        self.assertEqual([x["id"] for x in self.state.catalog("", include_equipment=True)], [31, 32, 33])
+        self.assertEqual(self.state.inventory, original)
+
     def test_equipment_groups_use_official_weapon_types_then_rarity(self):
         kinds = {"Glove": "拳套", "Sword": "剑", "Blade": "刀", "Lance": "枪", "Staff": "棍", "Fan": "扇", "Dagger": "匕首", "Brush": "笔", "Guqin": "琴", "Flute": "箫", "Pipa": "琵琶"}
         for i, (key, name) in enumerate(kinds.items()):
