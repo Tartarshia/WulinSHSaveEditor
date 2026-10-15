@@ -6,6 +6,8 @@ only reads paths chosen on the local machine.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import secrets
 import shutil
@@ -58,6 +60,7 @@ class EditorState:
         self.material_catalog: dict[int, dict] = {}
         self.treasure_catalog: dict[int, dict] = {}
         self.other_stackable_catalog: dict[int, dict] = {}
+        self.equipment_catalog: dict[int, dict] = {}
         self.character_names: dict[int, str] = {}
         self.character_profiles: dict[int, tuple[str, str]] = {}
         self.affinity_candidates: dict[str, set[int]] = {}
@@ -131,6 +134,7 @@ class EditorState:
             self.material_catalog = {}
             self.treasure_catalog = {}
             self.other_stackable_catalog = {}
+            self.equipment_catalog = {}
             self.main_prop_growth = {}
             self.recipe_details = {}
             self.book_catalog = {}
@@ -154,6 +158,8 @@ class EditorState:
             self.treasure_catalog = load_consumable_catalog(self.game_root, "珍宝")
         if not self.other_stackable_catalog:
             self.other_stackable_catalog = load_consumable_catalog(self.game_root, "其他（可堆叠）")
+        if not self.equipment_catalog:
+            self.equipment_catalog = load_consumable_catalog(self.game_root, "装备")
         if not self.character_names:
             self.character_names = load_character_names(self.game_root)
         if not self.character_profiles:
@@ -408,6 +414,44 @@ class EditorState:
         if not learned: recipes[:] = [value for value in recipes if value != recipe_id]
         return "配方学习状态已在内存中修改。"
 
+    @staticmethod
+    def equipment_fingerprint(item: dict) -> str:
+        return hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def equipment(self, needle: str = "", status: str = "all") -> dict:
+        self.require_loaded(); needle = needle.casefold().strip()
+        records = {}
+        for index, item in enumerate(self.inventory):
+            item_id = item.get("m_templeteId")
+            if item_id in self.equipment_catalog:
+                records.setdefault(item_id, []).append({"index": index, "fingerprint": self.equipment_fingerprint(item), "modified": bool(item.get("modifyData"))})
+        rows = []
+        for item_id, detail in self.equipment_catalog.items():
+            name = self.item_catalog.get(item_id, (str(item_id), ""))[0]
+            copies = records.get(item_id, [])
+            if status == "owned" and not copies or status == "missing" and copies: continue
+            if needle and needle not in str(item_id) and needle not in name.casefold(): continue
+            rows.append({"id": item_id, "name": name, "description": self.item_description(item_id), "copies": copies, **detail})
+        order = {"武器": 0, "防具": 1, "饰品": 2}
+        rows.sort(key=lambda x: (order[x["group"]], -x["rarity"], x["id"]))
+        return {"rows": rows, "total": len(self.equipment_catalog)}
+
+    def change_equipment(self, data: dict) -> None:
+        self.require_loaded(); item_id = int(data["id"])
+        if item_id not in self.equipment_catalog: raise ValueError("该 ID 不属于官方武器、防具或饰品。")
+        if data.get("action") == "add":
+            if any(x.get("m_templeteId") == item_id for x in self.inventory):
+                raise ValueError("背包已拥有此装备，请刷新页面。")
+            self.set_item(item_id, 1)
+        elif data.get("action") == "delete":
+            index = int(data["index"])
+            if not 0 <= index < len(self.inventory): raise ValueError("背包已变化，请刷新页面后再删除。")
+            item = self.inventory[index]
+            if item.get("m_templeteId") != item_id or self.equipment_fingerprint(item) != data.get("fingerprint"):
+                raise ValueError("背包已变化，请刷新页面后再删除。")
+            self.delete_item(index)
+        else: raise ValueError("装备只支持添加或删除。")
+
     def set_item(self, item_id: int, count: int) -> None:
         self.require_loaded()
         if item_id <= 0 or not 0 < count <= 999_999: raise ValueError("ID 必须大于 0，数量范围为 1–999999。")
@@ -632,7 +676,7 @@ class EditorState:
         backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
         if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target in {"characters", "relations", "life"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
-        elif target in {"books", "recipes", "consumables", "materials", "treasures", "other_stackable"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
+        elif target in {"books", "recipes", "consumables", "materials", "treasures", "other_stackable", "equipment"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target == "factions": es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
         elif target == "global":
             es3_codec.atomic_write(folder / TEAM_FILE, self.team_data); es3_codec.atomic_write(folder / CHAR_FILE, self.char_data); es3_codec.atomic_write(folder / TIME_FILE, self.time_data)
@@ -698,6 +742,10 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     def api_catalog(): return respond(lambda: state.catalog(request.args.get("q", ""), request.args.get("include_books") == "1", request.args.get("include_recipes") == "1", request.args.get("include_consumables") == "1", request.args.get("include_materials") == "1", request.args.get("include_treasures") == "1", request.args.get("include_other_stackable") == "1"))
     @app.get("/api/consumables")
     def api_consumables(): return respond(lambda: state.consumables(request.args.get("q", ""), request.args.get("status", "all")))
+    @app.get("/api/equipment")
+    def api_equipment(): return respond(lambda: state.equipment(request.args.get("q", ""), request.args.get("status", "all")))
+    @app.post("/api/equipment")
+    def api_change_equipment(): return respond(lambda: (state.change_equipment(body()), {"message": "装备已在内存中修改，点击保存装备后才写入存档。"})[1])
     @app.post("/api/consumables")
     def api_set_consumable(): return respond(lambda: (state.set_consumable_count(int(body()["id"]), int(body()["count"])), {"message": "消耗品数量已在内存中修改。"})[1])
     @app.post("/api/consumables/experience-books-999")

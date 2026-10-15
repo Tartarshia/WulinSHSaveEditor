@@ -6,6 +6,29 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_equipment_is_instance_based_and_rejects_stale_delete(self):
+        self.state.equipment_catalog = {20: {"rarity": 3, "group": "武器"}, 21: {"rarity": 2, "group": "防具"}, 22: {"rarity": 1, "group": "饰品"}}
+        self.state.item_catalog.update({20: ("测试剑", "武器"), 21: ("测试甲", "防具"), 22: ("测试饰品", "饰品")})
+        original = copy.deepcopy(self.state.inventory)
+        self.state.change_equipment({"action": "add", "id": 20})
+        self.assertEqual(self.state.inventory[-1]["m_stack"], 1)
+        with self.assertRaises(ValueError): self.state.change_equipment({"action": "add", "id": 20})
+        with self.assertRaises(ValueError): self.state.change_equipment({"action": "add", "id": 3})
+        self.state.inventory.append({"m_templeteId": 20, "m_stack": 1, "modifyData": {"test": 42}})
+        row = self.state.equipment(status="owned")["rows"][0]
+        self.assertEqual(len(row["copies"]), 2)
+        self.assertTrue(row["copies"][1]["modified"])
+        first, second = row["copies"]
+        self.state.change_equipment({"action": "delete", "id": 20, **first})
+        with self.assertRaises(ValueError): self.state.change_equipment({"action": "delete", "id": 20, **second})
+        with self.assertRaises(ValueError): self.state.change_equipment({"action": "delete", "id": 20, **first})
+        self.assertEqual(self.state.inventory[-1]["modifyData"], {"test": 42})
+        fresh = self.state.equipment()["rows"][0]["copies"][0]
+        self.state.change_equipment({"action": "delete", "id": 20, **fresh})
+        self.assertEqual(self.state.inventory, original)
+        self.assertEqual([x["group"] for x in self.state.equipment()["rows"]], ["武器", "防具", "饰品"])
+        self.assertEqual(self.state.equipment(status="owned")["rows"], [])
+
     def test_other_stackable_classification_requires_explicit_flag(self):
         for flag in (True, "TRUE", " true ", 1):
             self.assertEqual(stackable_other_group("Misc_HidWep", "飞镖", "", flag), "暗器")

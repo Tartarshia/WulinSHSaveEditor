@@ -73,6 +73,8 @@ class BrowserUiTests(unittest.TestCase):
                 data = dict(consumables=consumables, total=2)
             elif path == "/api/books":
                 data = dict(books=[dict(id=3, name="测试秘籍", group="内功", rarity=2, owned=False, description="测试说明")], total=1)
+            elif path == "/api/equipment":
+                data = dict(rows=[dict(id=6, name="测试武器", group="武器", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True)], description="防具说明")], total=2)
             elif path == "/api/recipes":
                 data = dict(recipes=[dict(id=4, name="测试配方", group="食物", rarity=1, owned=False, description="测试说明")], total=1)
             elif path.startswith("/api/inventory-groups/"):
@@ -120,7 +122,7 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
             toggle.click()
             self.assertTrue(page.locator("#consumableGroups .item-description").first.is_visible())
-            for tab in ["books", "recipes", "materials", "treasures", "other_stackable", "life"]:
+            for tab in ["books", "recipes", "materials", "treasures", "other_stackable", "equipment", "life"]:
                 page.locator(f'[data-tab="{tab}"]').click()
                 button = page.locator(f"#{tab} .group-toggle").first
                 button.wait_for()
@@ -137,6 +139,17 @@ class BrowserUiTests(unittest.TestCase):
             self.assertFalse(page.locator('#showItemOtherStackable').is_checked())
             with page.expect_request(lambda r: '/api/items?' in r.url and 'include_other_stackable=1' in r.url):
                 page.locator('#showItemOtherStackable').check()
+            page.locator('[data-tab="equipment"]').click()
+            page.locator('#equipmentGroups .book-card').first.wait_for()
+            self.assertEqual(page.locator('#equipmentGroups input').count(), 0)
+            self.assertEqual(page.locator('#equipmentGroups button').filter(has_text="编辑").count(), 0)
+            with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as added:
+                page.locator('[data-equipment="add"]').click()
+            self.assertEqual(json.loads(added.value.post_data), dict(action="add", id="6"))
+            page.locator('[data-equipment="delete"]').click()
+            with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as removed:
+                page.locator('#confirm button[value="ok"]').click()
+            self.assertEqual(json.loads(removed.value.post_data), dict(action="delete", id="7", index="0", fingerprint="test"))
             page.locator('[data-tab="life"]').click()
             page.locator('#life [data-save="life"]').click()
             page.locator('#confirm button[value="ok"]').click()
@@ -153,7 +166,7 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(page.locator("#characterDetail h2").first.inner_text(), "测试角色39")
             for width in [1400, 900, 540, 375, 320]:
                 page.set_viewport_size({"width": width, "height": 900})
-                for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "other_stackable", "relations", "factions"]:
+                for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "other_stackable", "equipment", "relations", "factions"]:
                     page.locator(f'[data-tab="{tab}"]').click()
                     page.wait_for_timeout(40)
                     self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), (width, tab))
