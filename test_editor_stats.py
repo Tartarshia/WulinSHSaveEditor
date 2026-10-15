@@ -6,6 +6,25 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_max_life_abilities_sets_each_cap_and_clears_only_its_experience(self):
+        self.state.life_catalog = {"能力_采集_采矿": 5, "能力_鉴定_字画": 3}
+        self.state.hero["m_additionProps"].update({"能力_采集_采矿": 1, "能力经验_采集_采矿": 123.5, "能力经验_鉴定_字画": 77, "其他经验": 88})
+        self.state.all_characters["10092"] = copy.deepcopy(self.state.hero)
+        companion = copy.deepcopy(self.state.all_characters["10092"])
+        before = copy.deepcopy(self.state.hero)
+        self.assertEqual(self.state.max_life_abilities()["count"], 2)
+        expected = copy.deepcopy(before)
+        for key, maximum in self.state.life_catalog.items():
+            expected["m_additionProps"][key] = maximum
+            expected["m_additionProps"]["能力经验_" + key[len("能力_"):]] = 0
+        self.assertEqual(self.state.hero, expected)
+        self.assertEqual(self.state.all_characters["10092"], companion)
+        self.state.max_life_abilities()
+        self.assertEqual(self.state.hero, expected)
+        self.state.life_catalog = {}
+        with self.assertRaises(ValueError): self.state.max_life_abilities()
+        self.assertEqual(self.state.hero, expected)
+
     def test_life_ability_listing_and_edit_target_only_hero(self):
         self.state.life_catalog = {"能力_采集_采矿": 5, "能力_鉴定_字画": 3}
         before = copy.deepcopy(self.state.char_data)

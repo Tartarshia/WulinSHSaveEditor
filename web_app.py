@@ -494,6 +494,15 @@ class EditorState:
             rows.append({"key": key, "category": category, "name": name, "level": addition.get(key, 0), "max": maximum, "exp": addition.get(exp_key, 0)})
         return {"abilities": rows, "total": len(rows)}
 
+    def max_life_abilities(self) -> dict:
+        self.require_loaded()
+        if not self.life_catalog: raise ValueError("当前游戏资料中没有找到生活技能。")
+        props = self.hero.setdefault("m_additionProps", {})
+        for key, maximum in self.life_catalog.items():
+            props[key] = maximum
+            props["能力经验_" + key[len("能力_"):]] = 0
+        return {"count": len(self.life_catalog), "message": f"已将全部 {len(self.life_catalog)} 项生活技能设为满级，经验清零（仅内存）；点击保存生活技能后才写入存档。"}
+
     def set_character(self, cid: str, payload: dict) -> None:
         self.require_loaded()
         char = self.all_characters.get(cid)
@@ -532,10 +541,10 @@ class EditorState:
             if not 1 <= level <= maximum or not 0 <= exp <= MAX_VALUE: raise ValueError(f"武功等级范围为 1–{maximum}。")
             ability["m_level"], ability["m_exp"] = level, exp
         elif kind == "life":
-            if cid != "100401": raise ValueError("生活能力仅属于主角。")
-            if payload.get("key") not in self.life_catalog: raise ValueError("未知的生活能力。")
+            if cid != "100401": raise ValueError("生活技能仅属于主角。")
+            if payload.get("key") not in self.life_catalog: raise ValueError("未知的生活技能。")
             key = payload["key"]; maximum = self.life_catalog[key]; level, exp = int(payload["level"]), float(payload["exp"])
-            if not 0 <= level <= maximum or not 0 <= exp <= MAX_VALUE: raise ValueError(f"生活能力等级范围为 0–{maximum}。")
+            if not 0 <= level <= maximum or not 0 <= exp <= MAX_VALUE: raise ValueError(f"生活技能等级范围为 0–{maximum}。")
             props = char.setdefault("m_additionProps", {}); props[key] = level; props["能力经验_" + key[len("能力_") :]] = int(exp) if exp.is_integer() else exp
         else: raise ValueError("未知的角色修改类型。")
 
@@ -699,7 +708,9 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     @app.get("/api/life-abilities")
     def api_life_abilities(): return respond(state.life_abilities)
     @app.post("/api/life-abilities")
-    def api_set_life_ability(): return respond(lambda: (state.set_character("100401", {**body(), "kind": "life"}), {"message": "主角生活能力已在内存中修改，点击保存生活能力后才写入存档。"})[1])
+    def api_set_life_ability(): return respond(lambda: (state.set_character("100401", {**body(), "kind": "life"}), {"message": "主角生活技能已在内存中修改，点击保存生活技能后才写入存档。"})[1])
+    @app.post("/api/life-abilities/max")
+    def api_max_life_abilities(): return respond(state.max_life_abilities)
     @app.get("/api/recipes")
     def api_recipes(): return respond(lambda: state.recipes(request.args.get("q", ""), request.args.get("status", "all")))
     @app.post("/api/recipes")
