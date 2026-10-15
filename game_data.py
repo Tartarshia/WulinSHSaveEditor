@@ -2,11 +2,87 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from pathlib import Path
 import re
+import struct
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+
+
+def plain_game_text(value: str) -> str:
+    """Keep game text, but remove Unity rich-text markup, never render it as HTML."""
+    value = str(value or "").replace("\\n", "\n")
+    return re.sub(r"</?(?:color|size|b|i|u|sprite|link|align|indent|line-height|font|voffset)\b[^>]*>|<#[0-9a-fA-F]{6,8}>", "", value).strip()
+
+
+def read_localized_item_info(raw: bytes) -> dict[str, str]:
+    """Read only validated named Odin string fields, not the entire game graph."""
+    key_marker = b"\x27\x01\x05\x00\x00\x00" + "UName".encode("utf-16-le")
+    chinese_marker = b"\x27\x01\x08\x00\x00\x00" + "SChinese".encode("utf-16-le")
+    def string_at(offset):
+        if offset + 5 > len(raw): raise ValueError("本地化字符串不完整")
+        encoding = raw[offset]
+        length = struct.unpack_from("<i", raw, offset + 1)[0]
+        if encoding not in (0, 1) or not 0 <= length <= 1_000_000: raise ValueError("本地化字符串格式不支持")
+        end = offset + 5 + length * (2 if encoding else 1)
+        if end > len(raw): raise ValueError("本地化字符串越界")
+        return raw[offset + 5:end].decode("utf-16-le" if encoding else "latin1"), end
+    result = {}
+    for match in re.finditer(re.escape(key_marker), raw):
+        try: key, offset = string_at(match.end())
+        except (ValueError, UnicodeError): continue
+        if not key.startswith("ItemInfo_"): continue
+        if raw[offset:offset + len(chinese_marker)] != chinese_marker: continue
+        value, _ = string_at(offset + len(chinese_marker))
+        result[key.removeprefix("ItemInfo_")] = plain_game_text(value)
+    if not result: raise ValueError("未找到游戏物品中文说明")
+    return result
+
+
+def load_item_descriptions(game_root: Path) -> dict[int, str]:
+    import UnityPy
+    bundle = game_root / "Wulin_Data/StreamingAssets/aa/StandaloneWindows64/config_assets_all.bundle"
+    env = UnityPy.load(str(bundle))
+    localized = None
+    for obj in env.objects:
+        if obj.type.name == "MonoBehaviour" and obj.peek_name() == "LocData":
+            localized = read_localized_item_info(obj.get_raw_data())
+            break
+    if localized is None: raise ValueError("游戏资源包中未找到 LocData 物品说明")
+    del env
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as source:
+        def table(name):
+            return json.loads(source.read(f"Assets/GameRes/json/1/{name}.txt").decode("utf-8-sig"))[name]
+        items, buffs = table("ItemData"), {row["uName"]: row for row in table("BuffData")}
+    result = {}
+    aliases = {"D_Hp": "气血", "D_Mp": "内力", "T_队伍体力": "队伍体力", "T_队伍心情": "队伍心情"}
+    def stats(values):
+        formatted = []
+        for entry in values or []:
+            key, separator, value = str(entry).partition("|")
+            formatted.append(f"{aliases.get(key, key)} {value}" if separator else key)
+        return "、".join(formatted)
+    for row in items:
+        try: item_id = int(row["uid"])
+        except (TypeError, ValueError): continue
+        name = row["uName"]
+        lines = [localized.get(name, localized.get(name.strip(), "游戏资料中暂无文字说明。"))]
+        for label, field in (("装备要求", "equipRequire"), ("基础装备属性", "equipBonus"), ("使用条件", "usageRestrict")):
+            if row.get(field): lines.append(label + "：" + stats(row[field]))
+        effects = []
+        for buff_name in str(row.get("consumeEffect") or "").split(","):
+            effects.extend(buffs.get(buff_name, {}).get("instantEffect") or [])
+        if effects: lines.append("使用直接效果（表中值）：" + stats(effects))
+        if row.get("kungfuLearn"): lines.append("可学习武功：" + row["kungfuLearn"])
+        result[item_id] = "\n".join(lines)
+    # The shipped JSON may lag the spreadsheet for DLC/newly added items.
+    for item_id, (name, _) in load_item_catalog(game_root).items():
+        if item_id not in result:
+            result[item_id] = localized.get(name, localized.get(name.strip(), "游戏资料中暂无文字说明。"))
+    return result
 
 
 def item_category(item_type: str) -> str:
@@ -73,6 +149,41 @@ def load_item_names(game_root: Path) -> dict[int, str]:
     return {item_id: value[0] for item_id, value in load_item_catalog(game_root).items()}
 
 
+def load_book_catalog(game_root: Path) -> dict[int, dict]:
+    """Read book rarity and detailed martial-art types from the same official ItemData."""
+    kinds = {"Inner": "内功", "Outer_Fist": "外功 · 拳掌", "Outer_Sword": "外功 · 剑法",
+             "Outer_Blade": "外功 · 刀法", "Outer_Lance": "外功 · 枪法", "Outer_Staff": "外功 · 棍法",
+             "Outer_Fan": "外功 · 扇法", "Outer_Brush": "外功 · 笔法", "Outer_Dagger": "外功 · 短兵",
+             "Outer_Guqin": "外功 · 琴", "Outer_Flute": "外功 · 箫", "Outer_Pipa": "外功 · 琵琶"}
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "ItemData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result = {}
+            for row in workbook["ItemData"].iter_rows(min_row=4, min_col=2, max_col=10, values_only=True):
+                item_type = str(row[8] or "")
+                if not item_type.startswith("KungfuBook"):
+                    continue
+                try:
+                    item_id, rarity = int(row[0]), int(row[3])
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(row[1], str) or not row[1]:
+                    continue
+                kind = item_type.removeprefix("KungfuBook_")
+                result[item_id] = {"rarity": rarity, "group": kinds.get(kind, "其他秘籍"),
+                                   "group_order": list(kinds).index(kind) if kind in kinds else len(kinds)}
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到秘籍品级和种类资料")
+
+
 def load_character_names(game_root: Path) -> dict[int, str]:
     """Return template ID -> display name from the installed CharacterPoolData."""
     archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
@@ -94,10 +205,61 @@ def load_character_names(game_root: Path) -> dict[int, str]:
                     continue
                 if isinstance(name, str) and name:
                     result[template_id] = name
+            # Verified DLC2 identity: the legacy table labels this reserved slot "已占用".
+            if result.get(10136) == "已占用": result[10136] = "纪茯苓"
             workbook.close()
             if result:
                 return result
     raise RuntimeError("游戏 ModEditor 中没有找到 CharacterPoolData 角色表")
+
+
+def load_character_profiles(game_root: Path) -> dict[int, tuple[str, str]]:
+    """Return unique character template ID -> (display name, official sex)."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "CharacterPoolData" not in workbook.sheetnames:
+                workbook.close()
+                continue
+            result: dict[int, tuple[str, str]] = {}
+            for row in workbook["CharacterPoolData"].iter_rows(min_row=4, min_col=2, max_col=9, values_only=True):
+                try:
+                    template_id = int(row[0])
+                except (TypeError, ValueError):
+                    continue
+                name, sex, unique = row[1], row[6], row[7]
+                if template_id == 10136 and name == "已占用":
+                    result[template_id] = ("纪茯苓", "Female")
+                    continue
+                if isinstance(name, str) and name and str(unique).upper() == "TRUE" and sex in {"Female", "Male"}:
+                    result[template_id] = (name, sex)
+            workbook.close()
+            if result:
+                return result
+    raise RuntimeError("游戏 ModEditor 中没有找到可用的角色性别资料")
+
+
+def load_affinity_candidates(game_root: Path, profiles: dict[int, tuple[str, str]]) -> dict[str, set[int]]:
+    """Use the game's romance pool, teammate table, and explicit sworn exclusions."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        constants = json.loads(bundle.read("Assets/GameRes/json/1/GameEnvConstStrData.txt").decode("utf-8-sig"))["GameEnvConstStrData"]
+        constants = {row["uName"]: row["value"] for row in constants}
+        romance = {int(value) for value in constants["UIBondsPot"].split(",")}
+        buffs = json.loads(bundle.read("Assets/GameRes/json/1/BuffData.txt").decode("utf-8-sig"))["BuffData"]
+        romance_names = {match.group(1) for row in buffs for match in [re.fullmatch(r"主角与(.+)情缘buff", str(row.get("uName", "")))] if match}
+        # Special-story/DLC bonds need not appear in the old romance UI pool.
+        romance_names.update({"凤璇玑", "海棠秋", "纪茯苓", "完颜昭宁"})
+        romance_names.update({"鱼薇儿"} if "鱼玄儿" in romance_names else set())
+        romance.update(uid for uid, (name, sex) in profiles.items() if sex == "Female" and name in romance_names)
+        teammates = json.loads(bundle.read("Assets/GameRes/json/1/CharacterTeamMemberExtendData.txt").decode("utf-8-sig"))["CharacterTeamMemberExtendData"]
+        forbidden = set(constants["SwornForbiddenList"].split(","))
+        sworn = {int(row["uid"]) for row in teammates if row.get("uName") not in forbidden}
+    return {"Female": {uid for uid in romance if profiles.get(uid, ("", ""))[1] == "Female"},
+            "Male": {uid for uid in sworn if profiles.get(uid, ("", ""))[1] == "Male"}}
 
 
 def load_faction_names(game_root: Path) -> dict[int, str]:
@@ -256,8 +418,94 @@ def load_recipe_catalog(game_root: Path) -> dict[int, str]:
 
 def load_team_stamina_bonuses(game_root: Path) -> dict[str, float]:
     """Return Buff data ID -> additive team-stamina-cap bonus from game data."""
+    return {key: value[0] for key, value in load_team_stamina_modifiers(game_root).items() if value[0]}
+
+
+def load_recipe_details(game_root: Path) -> dict[int, dict]:
+    """Classify active recipes by crafting ability and their produced item's rarity."""
+    products: dict[str, int] = {}
+    product_ids: dict[str, int] = {}
+    recipes = []
     archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
-    pattern = re.compile(r"队伍体力Max@团队\|(-?\d+(?:\.\d+)?)")
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"):
+                continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "ItemData" in workbook.sheetnames:
+                for row in workbook["ItemData"].iter_rows(min_row=4, min_col=2, max_col=5, values_only=True):
+                    try: rarity = int(row[3]); item_id = int(row[0])
+                    except (TypeError, ValueError): continue
+                    products[str(item_id)] = rarity
+                    product_ids[str(item_id)] = item_id
+                    if isinstance(row[1], str):
+                        products[row[1]] = rarity
+                        product_ids[row[1]] = item_id
+            if "NewRecipeData" in workbook.sheetnames:
+                recipes.extend(workbook["NewRecipeData"].iter_rows(min_row=4, max_col=6, values_only=True))
+            workbook.close()
+    result = {}
+    for remark, recipe_id, name, ability, level, product in recipes:
+        if remark == "skip" or not isinstance(name, str) or not name: continue
+        try: recipe_id = int(recipe_id)
+        except (TypeError, ValueError): continue
+        product = str(product or "").split("|", 1)[0]
+        group = str(ability or "").removeprefix("能力_").replace("_", " · ") or "其他配方"
+        result[recipe_id] = {"group": group, "rarity": products.get(product, -1), "product_id": product_ids.get(product)}
+    if not result: raise RuntimeError("游戏 ModEditor 中没有找到配方分类和品质资料")
+    return result
+
+
+def load_main_prop_growth(game_root: Path) -> dict:
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        rows = json.loads(bundle.read("Assets/GameRes/json/1/GameEnvConstData.txt").decode("utf-8-sig"))["GameEnvConstData"]
+    constants = {row["uName"]: row["value"] for row in rows}
+    maximum = int(constants["CharacterMainPropMaxLevel"])
+    return {"max": maximum, "exp_to_next": {level: int(constants[f"CharacterMainProp{level}"]) for level in range(maximum)}}
+
+
+def consumable_group(item_type: str, fav_tags: str, default: str) -> str:
+    """The game also uses Meal for training books; its tags distinguish them."""
+    tags = {tag.strip() for tag in str(fav_tags or "").split(",")}
+    if item_type == "Consumeable_Edible_Meal" and "典籍" in tags:
+        return "经验书"
+    return default
+
+
+def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dict[int, dict]:
+    groups = {"Consumeable_Edible_Meal": "食物与酒水", "Consumeable_Edible_Medicine": "药品",
+              "Consumeable_Edible_Fruit": "水果", "Consumeable_Edible_Elixir": "丹药",
+              "Consumeable_Special": "特殊消耗品", "Consumeable_ChestItem": "宝箱与礼包"}
+    groups.update({"Consumeable_Material_" + key: name for key, name in {
+        "Herb": "药材", "Ore": "矿石", "Vege": "蔬菜", "Hide": "皮革",
+        "Meat": "肉类", "Misc": "其他材料", "Wood": "木材", "Seafood": "水产", "Water": "水与酿造材料"}.items()})
+    groups.update({"Misc_Treasure": "其他珍宝", "Misc_Treasure_Painting": "字画",
+                   "Misc_Treasure_Antique": "古董", "Misc_Treasure_Valuable": "贵重珍宝", "Misc_Treasure_Copybook": "字帖"})
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    with ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if not info.filename.lower().endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"): continue
+            workbook = load_workbook(BytesIO(bundle.read(info)), read_only=True, data_only=True)
+            if "ItemData" not in workbook.sheetnames:
+                workbook.close(); continue
+            result = {}
+            for row in workbook["ItemData"].iter_rows(min_row=4, min_col=2, max_col=25, values_only=True):
+                item_type = str(row[8] or "")
+                if item_category(item_type) != category: continue
+                try: item_id, rarity = int(row[0]), int(row[3])
+                except (TypeError, ValueError): continue
+                group = consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
+                result[item_id] = {"rarity": rarity, "group": group}
+            workbook.close()
+            if result: return result
+    raise RuntimeError(f"游戏 ModEditor 中没有找到{category}分类与品质资料")
+
+
+def load_team_stamina_modifiers(game_root: Path) -> dict[str, tuple[float, float]]:
+    """Return additive and percentage modifiers, including homestead upgrades."""
+    archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
+    pattern = re.compile(r"队伍体力Max(%)?@团队\|(-?\d+(?:\.\d+)?)")
     with ZipFile(archive) as bundle:
         for info in bundle.infolist():
             if not info.filename.lower().endswith(".xlsx"):
@@ -266,13 +514,15 @@ def load_team_stamina_bonuses(game_root: Path) -> dict[str, float]:
             if "BuffData" not in workbook.sheetnames:
                 workbook.close()
                 continue
-            result: dict[str, float] = {}
+            result: dict[str, tuple[float, float]] = {}
             for row in workbook["BuffData"].iter_rows(min_row=4, values_only=True):
                 if len(row) < 3 or not isinstance(row[2], str):
                     continue
-                bonus = sum(float(match.group(1)) for value in row if isinstance(value, str) for match in pattern.finditer(value))
-                if bonus:
-                    result[row[2]] = bonus
+                matches = [match for value in row if isinstance(value, str) for match in pattern.finditer(value)]
+                additive = sum(float(match.group(2)) for match in matches if not match.group(1))
+                percentage = sum(float(match.group(2)) for match in matches if match.group(1))
+                if additive or percentage:
+                    result[row[2]] = (additive, percentage)
             workbook.close()
             if result:
                 return result
