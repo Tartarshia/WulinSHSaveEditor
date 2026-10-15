@@ -63,7 +63,7 @@ class BrowserUiTests(unittest.TestCase):
                 route.continue_()
                 return
             if path == "/api/state":
-                data = dict(game_root="", save_root="", loaded=loaded, slot="Save0", slots=[dict(name="Save0", saved_at="测试时间")])
+                data = dict(game_root="", save_root="", loaded=loaded, slot="Save0", slots=[dict(name="Save0", saved_at="2026-10-14 22:49")])
             elif path == "/api/load":
                 loaded = True
                 data = {}
