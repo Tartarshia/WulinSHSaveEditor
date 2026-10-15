@@ -6,6 +6,24 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_reserve_members_show_homestead_rooms_without_guessing_all_are_home(self):
+        self.state.map_names = {502: "天工坊", 1100: "无名小村"}
+        self.state.team["playerTeam"] = [100401]
+        char = copy.deepcopy(self.state.hero)
+        char.update({"m_templeteUid": 10092, "m_TeamMemberState": {"isJoined": True}, "m_curMapId": 502, "m_curPos": {"x": -2147483648, "y": -2147483648}})
+        self.state.all_characters["10092"] = char
+        before = copy.deepcopy(self.state.char_data)
+        row = next(x for x in self.state.characters() if x["id"] == "10092")
+        self.assertEqual(row["status"], "已入队，未出战")
+        self.assertEqual(row["location"]["name"], "家园 · 天工坊")
+        self.assertIsNone(row["location"]["pos"])
+        self.assertEqual(self.state.character_detail("10092")["location"], row["location"])
+        self.assertEqual(self.state.char_data, before)
+        self.assertEqual(self.state.character_location({"m_curMapId": 500})["name"], "家园")
+        self.assertEqual(self.state.character_location({"m_curMapId": 1100})["name"], "无名小村")
+        self.state.team["playerTeam"].append(10092)
+        self.assertIsNone(next(x for x in self.state.characters() if x["id"] == "10092")["location"])
+
     def test_max_life_abilities_sets_each_cap_and_clears_only_its_experience(self):
         self.state.life_catalog = {"能力_采集_采矿": 5, "能力_鉴定_字画": 3}
         self.state.hero["m_additionProps"].update({"能力_采集_采矿": 1, "能力经验_采集_采矿": 123.5, "能力经验_鉴定_字画": 77, "其他经验": 88})

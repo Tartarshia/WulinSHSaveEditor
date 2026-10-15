@@ -420,7 +420,7 @@ class EditorState:
             state = char.get("m_TeamMemberState")
             if cid in active or isinstance(state, dict):
                 status = "出战中" if cid in active else ("已入队，未出战" if state.get("isJoined") else "曾入队，现已离队")
-                rows.append({"id": cid, "name": self.name(char), "status": status, "level": char.get("m_level", 0), "location": self.character_location(char) if cid not in active and not state.get("isJoined") else None})
+                rows.append({"id": cid, "name": self.name(char), "status": status, "level": char.get("m_level", 0), "location": self.character_location(char) if cid not in active else None})
         return sorted(rows, key=lambda x: (x["status"] != "出战中", x["name"], int(x["id"])))
 
     def character_location(self, char: dict) -> dict:
@@ -437,7 +437,13 @@ class EditorState:
             source, pos = "上次离队地点", team_state.get("leaveTeamPos")
         if map_id is None: return {"name": "存档未记录位置", "map_id": None, "source": "位置", "pos": None}
         if char.get("m_isAlive") is False: source = "已死亡 · 最后记录位置"
-        return {"name": getattr(self, "map_names", {}).get(map_id, f"未知地图 {map_id}"), "map_id": map_id, "source": source, "pos": {key: pos[key] for key in ("x", "y") if key in pos} if isinstance(pos, dict) else None}
+        name = getattr(self, "map_names", {}).get(map_id, f"未知地图 {map_id}")
+        # Homestead main map and rooms in the installed game; room names remain local-data driven.
+        if map_id in range(500, 508):
+            name = "家园" if map_id == 500 else f"家园 · {name}"
+        coordinates = {key: pos[key] for key in ("x", "y") if key in pos} if isinstance(pos, dict) else None
+        if coordinates and any(value == -2147483648 for value in coordinates.values()): coordinates = None
+        return {"name": name, "map_id": map_id, "source": source, "pos": coordinates}
 
     def affinities(self, sex: str) -> dict:
         self.require_loaded()
@@ -481,8 +487,8 @@ class EditorState:
             kungfu.append({"index": index, "id": ability_id, "name": name, "level": ability.get("m_level", 1), "max": maximum, "exp": ability.get("m_exp", 0)})
         life = self.life_abilities()["abilities"] if cid == "100401" else []
         team_state = char.get("m_TeamMemberState")
-        departed = isinstance(team_state, dict) and not team_state.get("isJoined") and cid not in {str(x) for x in self.team.get("playerTeam", [])}
-        return {"id": cid, "name": self.name(char), "location": self.character_location(char) if departed else None, "level": char.get("m_level", 1), "exp": char.get("m_exp", 0), "props": props, "innate": innate, "morals": morals, "kungfu": kungfu, "life": life}
+        off_field = isinstance(team_state, dict) and cid not in {str(x) for x in self.team.get("playerTeam", [])}
+        return {"id": cid, "name": self.name(char), "location": self.character_location(char) if off_field else None, "level": char.get("m_level", 1), "exp": char.get("m_exp", 0), "props": props, "innate": innate, "morals": morals, "kungfu": kungfu, "life": life}
 
     def life_abilities(self) -> dict:
         self.require_loaded()
