@@ -1,11 +1,40 @@
 import copy
 import unittest
+import struct
+from unittest.mock import patch
 
 from web_app import EditorState
 from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat, stackable_other_group, equipment_group
+from runtime_items import marker, read_string, read_item_records, read_integer_effects
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_runtime_reading_book_fields_and_effects_are_validated(self):
+        def string(value): return b"\x01" + struct.pack("<i", len(value)) + value.encode("utf-16-le")
+        def node(name, values):
+            return marker(1, name) + b"\x30" + struct.pack("<ii", 0, 0) + b"\x06" + struct.pack("<q", len(values)) + b"".join(b"\x28" + string(x) for x in values)
+        raw = (marker(23, "Uid") + struct.pack("<i", 90001) + marker(39, "UName") + string("测试典籍")
+               + marker(23, "Rarity") + struct.pack("<i", 2) + marker(29, "Type") + struct.pack("<q", 128)
+               + marker(43, "IsStackable") + b"\x01" + node("ConsumeEffect", ["测试效果"])
+               + marker(39, "ConsumeExp") + string("") + node("FavTags", ["典籍"]))
+        row = read_item_records(raw)[90001]
+        self.assertEqual((row["name"], row["rarity"], row["tags"], row["effects"]), ("测试典籍", 2, ["典籍"], ["测试效果"]))
+        self.assertEqual(read_item_records(raw[:30]), {})
+        for data in (b"\x01", b"\x02\x00\x00\x00\x00", b"\x01\xff\xff\xff\xff"):
+            with self.assertRaises(ValueError): read_string(data, 0)
+        effect = (marker(39, "UName") + string("测试效果") + marker(1, "InstantEffect")
+                  + marker(39, "key") + string("仁德") + marker(1, "values")
+                  + b"\x30" + struct.pack("<ii", 4, 1) + b"\x06" + struct.pack("<q", 1) + b"\x18" + struct.pack("<i", -5))
+        self.assertEqual(read_integer_effects(effect, {"测试效果"}), {"测试效果": ["仁德|-5"]})
+        self.assertEqual(read_integer_effects(effect[:-1], {"测试效果"}), {})
+        self.assertEqual(read_integer_effects(effect, {"其他效果"}), {})
+
+    def test_runtime_reading_book_supplement_merges_catalog_without_overwriting_export(self):
+        from game_data import load_item_catalog
+        from pathlib import Path
+        with patch("game_data._load_item_catalog_spreadsheet", return_value={1: ("已有典籍", "消耗品")}), patch("game_data.load_reading_books", return_value={2: {"name": "新增典籍"}}):
+            self.assertEqual(load_item_catalog(Path("synthetic-game")), {1: ("已有典籍", "消耗品"), 2: ("新增典籍", "消耗品")})
+
     def test_pet_equipment_supports_independent_additions_and_per_copy_deletion(self):
         self.state.equipment_catalog = {11201: {"rarity": 1, "group": "宠物武器", "group_order": 30}}
         self.state.item_catalog[11201] = ("测试宠物武器", "宠物装备")

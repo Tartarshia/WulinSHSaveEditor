@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from runtime_items import load_reading_books
 
 
 def plain_game_text(value: str) -> str:
@@ -116,6 +117,9 @@ def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = N
     for item_id, (name, _) in load_item_catalog(game_root).items():
         if item_id not in result:
             result[item_id] = localized.get(name, localized.get(name.strip(), "游戏资料中暂无文字说明。"))
+    for item_id, row in load_reading_books(game_root, _load_item_catalog_spreadsheet(game_root)).items():
+        if row["direct_effects"]:
+            result[item_id] += "\n使用直接效果（表中值）：" + stats(row["direct_effects"], direct=True)
     return result
 
 
@@ -151,6 +155,13 @@ def item_category(item_type: str) -> str:
 
 
 def load_item_catalog(game_root: Path) -> dict[int, tuple[str, str]]:
+    result = _load_item_catalog_spreadsheet(game_root)
+    for item_id, row in load_reading_books(game_root, result).items():
+        result[item_id] = (row["name"], "消耗品")
+    return result
+
+
+def _load_item_catalog_spreadsheet(game_root: Path) -> dict[int, tuple[str, str]]:
     archive = game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip"
     if not archive.is_file():
         raise FileNotFoundError(f"未找到游戏自带物品表：{archive}")
@@ -572,6 +583,9 @@ def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dic
                     group = other_group or consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
                     result[item_id] = {"rarity": rarity, "group": group}
             workbook.close()
+            if category == "消耗品":
+                for item_id, row in load_reading_books(game_root, _load_item_catalog_spreadsheet(game_root)).items():
+                    result[item_id] = {"rarity": row["rarity"], "group": "经验书"}
             if result: return result
     raise RuntimeError(f"游戏 ModEditor 中没有找到{category}分类与品质资料")
 
