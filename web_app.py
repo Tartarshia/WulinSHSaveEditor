@@ -457,9 +457,7 @@ class EditorState:
         self.require_loaded(); item_id = int(data["id"])
         if item_id not in self.equipment_catalog: raise ValueError("该 ID 不属于官方武器、防具或饰品。")
         if data.get("action") == "add":
-            if any(x.get("m_templeteId") == item_id for x in self.inventory):
-                raise ValueError("背包已拥有此装备，请刷新页面。")
-            self.set_item(item_id, 1)
+            self.inventory.append({"m_templeteId": item_id, "m_stack": 1, "modifyData": None, "IsNew": False, "IsForbidden": False})
         elif data.get("action") == "delete":
             index = int(data["index"])
             if not 0 <= index < len(self.inventory): raise ValueError("背包已变化，请刷新页面后再删除。")

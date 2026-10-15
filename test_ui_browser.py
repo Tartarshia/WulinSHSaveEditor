@@ -141,8 +141,9 @@ class BrowserUiTests(unittest.TestCase):
                 page.locator('#showItemOtherStackable').check()
             page.locator('[data-tab="equipment"]').click()
             page.locator('#equipmentGroups .book-card').first.wait_for()
-            self.assertEqual(page.locator('#equipmentGroups .book-card').count(), 3)
-            self.assertEqual(page.locator('[data-equipment="add"]').inner_text(), '添加1件')
+            self.assertEqual(page.locator('#equipmentGroups .book-card').count(), 4)
+            self.assertEqual(page.locator('[data-equipment="add"]').count(), 2)
+            self.assertEqual(page.locator('[data-equipment="add"]').first.inner_text(), '添加1件')
             self.assertEqual(page.locator('[data-equipment="delete"]').first.inner_text(), '删除1件')
             self.assertNotIn('锻造等级（原值）', page.locator('#equipmentGroups').inner_text())
             self.assertEqual(page.locator('[data-equipment-extra]').count(), 1)
@@ -173,8 +174,11 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(page.locator('#equipmentGroups input').count(), 0)
             self.assertEqual(page.locator('#equipmentGroups button').filter(has_text="编辑").count(), 0)
             with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as added:
-                page.locator('[data-equipment="add"]').click()
+                page.locator('[data-equipment="add"]').first.click()
             self.assertEqual(json.loads(added.value.post_data), dict(action="add", id="6"))
+            with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as duplicate:
+                page.locator('[data-equipment="add"][data-id="7"]').click()
+            self.assertEqual(json.loads(duplicate.value.post_data), dict(action="add", id="7"))
             page.locator('[data-equipment="delete"]').first.click()
             with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as removed:
                 page.locator('#confirm button[value="ok"]').click()

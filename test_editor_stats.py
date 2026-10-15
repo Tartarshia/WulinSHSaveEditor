@@ -26,7 +26,6 @@ class EditorStatsTests(unittest.TestCase):
         original = copy.deepcopy(self.state.inventory)
         self.state.change_equipment({"action": "add", "id": 20})
         self.assertEqual(self.state.inventory[-1]["m_stack"], 1)
-        with self.assertRaises(ValueError): self.state.change_equipment({"action": "add", "id": 20})
         with self.assertRaises(ValueError): self.state.change_equipment({"action": "add", "id": 3})
         self.state.inventory.append({"m_templeteId": 20, "m_stack": 1, "modifyData": {"test": 42}})
         row = self.state.equipment(status="owned")["rows"][0]
@@ -42,6 +41,21 @@ class EditorStatsTests(unittest.TestCase):
         self.assertEqual(self.state.inventory, original)
         self.assertEqual([x["group"] for x in self.state.equipment()["rows"]], ["武器", "防具", "饰品"])
         self.assertEqual(self.state.equipment(status="owned")["rows"], [])
+
+    def test_equipment_can_add_independent_copies_without_touching_existing_data(self):
+        self.state.equipment_catalog = {20: {"rarity": 3, "group": "武器"}}
+        self.state.item_catalog[20] = ("测试剑", "武器")
+        self.state.inventory.append({"m_templeteId": 20, "m_stack": 1, "modifyData": {"forgeLevel": 3}})
+        original = copy.deepcopy(self.state.inventory)
+        for _ in range(2): self.state.change_equipment({"action": "add", "id": 20})
+        self.assertEqual(self.state.inventory[:-2], original)
+        self.assertEqual([x["m_stack"] for x in self.state.inventory[-2:]], [1, 1])
+        self.assertTrue(all(x["modifyData"] is None for x in self.state.inventory[-2:]))
+        self.assertIsNot(self.state.inventory[-1], self.state.inventory[-2])
+        self.assertEqual(len(self.state.equipment()["rows"][0]["copies"]), 3)
+        fresh = self.state.equipment()["rows"][0]["copies"][-1]
+        self.state.change_equipment({"action": "delete", "id": 20, **fresh})
+        self.assertEqual(self.state.inventory[:-1], original)
 
     def test_other_stackable_classification_requires_explicit_flag(self):
         for flag in (True, "TRUE", " true ", 1):
