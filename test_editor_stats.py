@@ -6,6 +6,20 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_equipment_extra_data_displays_stored_values_without_mutation(self):
+        data = {"forgeLevel": -1, "rawRnd": [.25, .5], "overrideBonus": None,
+                "forgeEffect": {"504": {"key": "攻击", "values": [50], "isValid": False}}, "unknown": "<test>"}
+        original = copy.deepcopy(data)
+        rows = self.state.equipment_extra_data(data)
+        values = {x["label"]: x["value"] for x in rows}
+        self.assertEqual(values["锻造等级（原值）"], "-1")
+        self.assertEqual(values["随机记录（原值）"], "[0.25, 0.5]")
+        self.assertEqual(values["属性覆盖"], "未设置")
+        self.assertEqual(values["锻造效果 / 504 / 有效标记（原值）"], "否")
+        self.assertEqual(values["unknown"], "<test>")
+        self.assertEqual(self.state.equipment_extra_data(None), [])
+        self.assertEqual(data, original)
+
     def test_equipment_is_instance_based_and_rejects_stale_delete(self):
         self.state.equipment_catalog = {20: {"rarity": 3, "group": "武器"}, 21: {"rarity": 2, "group": "防具"}, 22: {"rarity": 1, "group": "饰品"}}
         self.state.item_catalog.update({20: ("测试剑", "武器"), 21: ("测试甲", "防具"), 22: ("测试饰品", "饰品")})

@@ -418,13 +418,30 @@ class EditorState:
     def equipment_fingerprint(item: dict) -> str:
         return hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
+    @staticmethod
+    def equipment_extra_data(data) -> list[dict]:
+        """Show stored values without claiming that stored effects are active."""
+        labels = {"templeteUid": "装备模板 ID", "forgeLevel": "锻造等级（原值）", "rawRnd": "随机记录（原值）",
+                  "overrideBonus": "属性覆盖", "overrideBonusExt": "额外效果覆盖", "overrideEquipReq": "装备要求覆盖",
+                  "forgeEffect": "锻造效果", "key": "属性或效果标识", "values": "数值（values）",
+                  "dValues": "数值（dValues）", "isValid": "有效标记（原值）"}
+        rows = []
+        def visit(value, path):
+            if isinstance(value, dict) and value:
+                for key, child in value.items(): visit(child, [*path, labels.get(key, str(key))])
+            else:
+                text = "未设置" if value is None else "是" if value is True else "否" if value is False else json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+                rows.append({"label": " / ".join(path) or "附加数据", "value": text})
+        if data: visit(data, [])
+        return rows
+
     def equipment(self, needle: str = "", status: str = "all") -> dict:
         self.require_loaded(); needle = needle.casefold().strip()
         records = {}
         for index, item in enumerate(self.inventory):
             item_id = item.get("m_templeteId")
             if item_id in self.equipment_catalog:
-                records.setdefault(item_id, []).append({"index": index, "fingerprint": self.equipment_fingerprint(item), "modified": bool(item.get("modifyData"))})
+                records.setdefault(item_id, []).append({"index": index, "fingerprint": self.equipment_fingerprint(item), "modified": bool(item.get("modifyData")), "extra_data": self.equipment_extra_data(item.get("modifyData"))})
         rows = []
         for item_id, detail in self.equipment_catalog.items():
             name = self.item_catalog.get(item_id, (str(item_id), ""))[0]

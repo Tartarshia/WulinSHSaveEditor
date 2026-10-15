@@ -74,7 +74,7 @@ class BrowserUiTests(unittest.TestCase):
             elif path == "/api/books":
                 data = dict(books=[dict(id=3, name="测试秘籍", group="内功", rarity=2, owned=False, description="测试说明")], total=1)
             elif path == "/api/equipment":
-                data = dict(rows=[dict(id=6, name="测试武器", group="武器", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True)], description="防具说明")], total=2)
+                data = dict(rows=[dict(id=6, name="测试武器", group="武器", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True, extra_data=[dict(label="锻造等级（原值）", value="2"), dict(label="测试字段", value="<script>")]), dict(index=1, fingerprint="second", modified=False, extra_data=[])], description="防具说明")], total=2)
             elif path == "/api/recipes":
                 data = dict(recipes=[dict(id=4, name="测试配方", group="食物", rarity=1, owned=False, description="测试说明")], total=1)
             elif path.startswith("/api/inventory-groups/"):
@@ -141,12 +141,20 @@ class BrowserUiTests(unittest.TestCase):
                 page.locator('#showItemOtherStackable').check()
             page.locator('[data-tab="equipment"]').click()
             page.locator('#equipmentGroups .book-card').first.wait_for()
+            self.assertEqual(page.locator('#equipmentGroups .book-card').count(), 3)
+            self.assertEqual(page.locator('[data-equipment="add"]').inner_text(), '添加1件')
+            self.assertEqual(page.locator('[data-equipment="delete"]').first.inner_text(), '删除1件')
+            self.assertIn('锻造等级（原值）', page.locator('#equipmentGroups').inner_text())
+            self.assertIn('<script>', page.locator('#equipmentGroups').inner_text())
+            self.assertEqual(page.locator('#equipmentGroups script').count(), 0)
+            copies = page.locator('#equipmentGroups .book-card').all()
+            self.assertAlmostEqual(copies[1].bounding_box()['y'], copies[2].bounding_box()['y'], delta=1)
             self.assertEqual(page.locator('#equipmentGroups input').count(), 0)
             self.assertEqual(page.locator('#equipmentGroups button').filter(has_text="编辑").count(), 0)
             with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as added:
                 page.locator('[data-equipment="add"]').click()
             self.assertEqual(json.loads(added.value.post_data), dict(action="add", id="6"))
-            page.locator('[data-equipment="delete"]').click()
+            page.locator('[data-equipment="delete"]').first.click()
             with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as removed:
                 page.locator('#confirm button[value="ok"]').click()
             self.assertEqual(json.loads(removed.value.post_data), dict(action="delete", id="7", index="0", fingerprint="test"))
