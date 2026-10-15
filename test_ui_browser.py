@@ -169,8 +169,14 @@ class BrowserUiTests(unittest.TestCase):
             page.locator('#equipmentExtraDialog button').click()
             self.assertFalse(modal.is_visible())
             page.set_viewport_size(dict(width=1400, height=900))
-            copies = page.locator('#equipmentGroups .book-card').all()
-            self.assertAlmostEqual(copies[1].bounding_box()['y'], copies[2].bounding_box()['y'], delta=1)
+            # Resizing back from mobile can still reflow/scroll-anchor between
+            # two protocol calls. Measure both cards in the same browser frame.
+            page.wait_for_function("""() => {
+                const cards = document.querySelectorAll('#equipmentGroups .book-card');
+                if (cards.length < 3) return false;
+                const a = cards[1].getBoundingClientRect(), b = cards[2].getBoundingClientRect();
+                return Math.abs(a.top - b.top) <= 1 && a.left < b.left;
+            }""")
             self.assertEqual(page.locator('#equipmentGroups input').count(), 0)
             self.assertEqual(page.locator('#equipmentGroups button').filter(has_text="编辑").count(), 0)
             with page.expect_request(lambda r: '/api/equipment' in r.url and r.method == 'POST') as added:
