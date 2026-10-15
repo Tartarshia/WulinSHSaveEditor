@@ -6,6 +6,38 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_life_ability_listing_and_edit_target_only_hero(self):
+        self.state.life_catalog = {"能力_采集_采矿": 5, "能力_鉴定_字画": 3}
+        before = copy.deepcopy(self.state.char_data)
+        rows = self.state.life_abilities()["abilities"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({x["category"] for x in rows}, {"采集", "鉴定"})
+        self.assertEqual(self.state.char_data, before)
+        self.state.all_characters["10092"] = copy.deepcopy(self.state.hero)
+        companion = copy.deepcopy(self.state.all_characters["10092"])
+        self.state.set_character("100401", {"kind": "life", "key": "能力_采集_采矿", "level": 5, "exp": 123.5})
+        row = next(x for x in self.state.life_abilities()["abilities"] if x["name"] == "采矿")
+        self.assertEqual((row["level"], row["exp"], row["max"]), (5, 123.5, 5))
+        self.assertEqual(self.state.all_characters["10092"], companion)
+        before = copy.deepcopy(self.state.char_data)
+        for level, exp in [(6, 0), (-1, 0), (2, -1), (2, "nan"), (2, "inf")]:
+            with self.assertRaises(ValueError): self.state.set_character("100401", {"kind": "life", "key": "能力_采集_采矿", "level": level, "exp": exp})
+            self.assertEqual(self.state.char_data, before)
+        with self.assertRaises(ValueError): self.state.set_character("10092", {"kind": "life", "key": "能力_采集_采矿", "level": 1, "exp": 0})
+        with self.assertRaises(ValueError): self.state.set_character("100401", {"kind": "life", "key": "能力_未知", "level": 1, "exp": 0})
+
+    def test_life_save_uses_character_file_and_backup(self):
+        from unittest.mock import patch
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        with TemporaryDirectory() as folder:
+            self.state.save_root = Path(folder)
+            self.state.slot = "SyntheticSlot"
+            with patch("web_app.shutil.copytree") as backup, patch("web_app.es3_codec.atomic_write") as write:
+                self.state.save("life")
+                backup.assert_called_once()
+                write.assert_called_once_with(Path(folder) / "SyntheticSlot" / "SaveObjectGameCharacter.save", self.state.char_data)
+
     def test_experience_books_shortcut_sets_all_to_999_without_touching_other_items(self):
         self.state.item_catalog.update({4: ("测试经验书甲", "消耗品"), 5: ("测试经验书乙", "消耗品")})
         self.state.consumable_catalog.update({4: {"group": "经验书"}, 5: {"group": "经验书"}})
@@ -91,6 +123,7 @@ class EditorStatsTests(unittest.TestCase):
         self.state.character_names = {}
         self.state.book_catalog = {}
         self.state.consumable_catalog = {3: {"rarity": 1, "group": "药品"}}
+        self.state.life_catalog = {}
         self.state.material_catalog = {8: {"rarity": 2, "group": "药材"}}
         self.state.treasure_catalog = {9: {"rarity": 3, "group": "古董"}}
         self.state.time_data = {"Data": {"value": {}}}

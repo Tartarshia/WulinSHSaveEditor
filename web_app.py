@@ -479,15 +479,20 @@ class EditorState:
         for index, ability in enumerate(char.get("kungfuInstances", [])):
             ability_id = ability.get("m_templeteUid"); name, maximum = self.kungfu_catalog.get(ability_id, (f"未知武功 {ability_id}", 10))
             kungfu.append({"index": index, "id": ability_id, "name": name, "level": ability.get("m_level", 1), "max": maximum, "exp": ability.get("m_exp", 0)})
-        life = []
-        if cid == "100401":
-            addition = char.get("m_additionProps", {})
-            for key, maximum in sorted(self.life_catalog.items()):
-                _, category, name = key.split("_", 2); exp_key = "能力经验_" + key[len("能力_"):]
-                life.append({"key": key, "category": category, "name": name, "level": addition.get(key, 0), "max": maximum, "exp": addition.get(exp_key, 0)})
+        life = self.life_abilities()["abilities"] if cid == "100401" else []
         team_state = char.get("m_TeamMemberState")
         departed = isinstance(team_state, dict) and not team_state.get("isJoined") and cid not in {str(x) for x in self.team.get("playerTeam", [])}
         return {"id": cid, "name": self.name(char), "location": self.character_location(char) if departed else None, "level": char.get("m_level", 1), "exp": char.get("m_exp", 0), "props": props, "innate": innate, "morals": morals, "kungfu": kungfu, "life": life}
+
+    def life_abilities(self) -> dict:
+        self.require_loaded()
+        addition = self.hero.get("m_additionProps", {})
+        rows = []
+        for key, maximum in sorted(self.life_catalog.items()):
+            _, category, name = key.split("_", 2)
+            exp_key = "能力经验_" + key[len("能力_"):]
+            rows.append({"key": key, "category": category, "name": name, "level": addition.get(key, 0), "max": maximum, "exp": addition.get(exp_key, 0)})
+        return {"abilities": rows, "total": len(rows)}
 
     def set_character(self, cid: str, payload: dict) -> None:
         self.require_loaded()
@@ -528,6 +533,7 @@ class EditorState:
             ability["m_level"], ability["m_exp"] = level, exp
         elif kind == "life":
             if cid != "100401": raise ValueError("生活能力仅属于主角。")
+            if payload.get("key") not in self.life_catalog: raise ValueError("未知的生活能力。")
             key = payload["key"]; maximum = self.life_catalog[key]; level, exp = int(payload["level"]), float(payload["exp"])
             if not 0 <= level <= maximum or not 0 <= exp <= MAX_VALUE: raise ValueError(f"生活能力等级范围为 0–{maximum}。")
             props = char.setdefault("m_additionProps", {}); props[key] = level; props["能力经验_" + key[len("能力_") :]] = int(exp) if exp.is_integer() else exp
@@ -605,7 +611,7 @@ class EditorState:
         self.require_loaded(); folder = self.save_root / self.slot; backup = self.save_root / "_EditorBackups" / f"{self.slot}_{datetime.now():%Y%m%d_%H%M%S}"
         backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
         if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
-        elif target == "characters" or target == "relations": es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
+        elif target in {"characters", "relations", "life"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
         elif target in {"books", "recipes", "consumables", "materials", "treasures"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target == "factions": es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
         elif target == "global":
@@ -690,6 +696,10 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     def api_set_book(): return respond(lambda: {"message": state.set_book_owned(int(body()["id"]), bool(body()["owned"]))})
     @app.get("/api/characters")
     def api_characters(): return respond(lambda: {"characters": state.characters()})
+    @app.get("/api/life-abilities")
+    def api_life_abilities(): return respond(state.life_abilities)
+    @app.post("/api/life-abilities")
+    def api_set_life_ability(): return respond(lambda: (state.set_character("100401", {**body(), "kind": "life"}), {"message": "主角生活能力已在内存中修改，点击保存生活能力后才写入存档。"})[1])
     @app.get("/api/recipes")
     def api_recipes(): return respond(lambda: state.recipes(request.args.get("q", ""), request.args.get("status", "all")))
     @app.post("/api/recipes")
