@@ -6,18 +6,32 @@ from game_data import consumable_group, read_localized_item_info, plain_game_tex
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_pet_equipment_supports_independent_additions_and_per_copy_deletion(self):
+        self.state.equipment_catalog = {11201: {"rarity": 1, "group": "宠物武器", "group_order": 30}}
+        self.state.item_catalog[11201] = ("测试宠物武器", "宠物装备")
+        original = copy.deepcopy(self.state.inventory)
+        for _ in range(2): self.state.change_equipment({"action": "add", "id": 11201})
+        rows = self.state.equipment()["rows"]
+        self.assertEqual(rows[0]["group"], "宠物武器")
+        self.assertEqual(len(rows[0]["copies"]), 2)
+        self.assertEqual(self.state.items()["items"], [])
+        self.assertEqual(len(self.state.items(include_equipment=True)["items"]), 2)
+        self.state.change_equipment({"action": "delete", "id": 11201, **rows[0]["copies"][-1]})
+        self.assertEqual(self.state.inventory[:-1], original)
+        self.assertEqual(self.state.inventory[-1]["m_stack"], 1)
+
     def test_equipment_hidden_by_default_in_items_and_add_catalog(self):
-        for item_id, category in ((31, "武器"), (32, "防具"), (33, "饰品")):
+        for item_id, category in ((31, "武器"), (32, "防具"), (33, "饰品"), (34, "宠物装备")):
             self.state.item_catalog[item_id] = ("测试" + category, category)
             self.state.inventory.append({"m_templeteId": item_id, "m_stack": 1})
         original = copy.deepcopy(self.state.inventory)
         self.assertEqual(self.state.items()["items"], [])
         self.assertEqual(self.state.catalog(""), [])
-        self.assertFalse({"武器", "防具", "饰品"} & set(self.state.items()["categories"]))
+        self.assertFalse({"武器", "防具", "饰品", "宠物装备"} & set(self.state.items()["categories"]))
         visible = self.state.items(include_equipment=True)
-        self.assertEqual([x["id"] for x in visible["items"]], [31, 32, 33])
-        self.assertEqual([x["index"] for x in visible["items"]], [3, 4, 5])
-        self.assertEqual([x["id"] for x in self.state.catalog("", include_equipment=True)], [31, 32, 33])
+        self.assertEqual([x["id"] for x in visible["items"]], [31, 32, 33, 34])
+        self.assertEqual([x["index"] for x in visible["items"]], [3, 4, 5, 6])
+        self.assertEqual([x["id"] for x in self.state.catalog("", include_equipment=True)], [31, 32, 33, 34])
         self.assertEqual(self.state.inventory, original)
 
     def test_equipment_groups_use_official_weapon_types_then_rarity(self):
@@ -26,7 +40,10 @@ class EditorStatsTests(unittest.TestCase):
             self.assertEqual(equipment_group("Equip_Weapon_" + key), ("武器 · " + name, i))
         self.assertEqual(equipment_group("Equip_Armor"), ("防具", 20))
         self.assertEqual(equipment_group("Equip_Amulet"), ("饰品", 21))
-        with self.assertRaises(ValueError): equipment_group("Equip_Weapon_Pet")
+        self.assertEqual(equipment_group("Equip_Weapon_Pet"), ("宠物武器", 30))
+        self.assertEqual(equipment_group("Equip_Armor_Pet"), ("宠物防具", 31))
+        self.assertEqual(equipment_group("Equip_Amulet_Pet"), ("宠物饰品", 32))
+        with self.assertRaises(ValueError): equipment_group("Misc_Quest")
         self.state.equipment_catalog = {
             20: {"group": "武器 · 剑", "group_order": 1, "rarity": 1},
             21: {"group": "武器 · 刀", "group_order": 2, "rarity": 3},

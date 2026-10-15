@@ -531,7 +531,11 @@ def equipment_group(item_type: str) -> tuple[str, int]:
         return "武器 · " + kinds.get(kind, "其他"), list(kinds).index(kind) if kind in kinds else len(kinds)
     if category == "防具": return "防具", 20
     if category == "饰品": return "饰品", 21
-    raise ValueError("不属于武器、防具或饰品。")
+    if category == "宠物装备":
+        if item_type.startswith("Equip_Weapon_Pet"): return "宠物武器", 30
+        if item_type.startswith("Equip_Armor_Pet"): return "宠物防具", 31
+        return "宠物饰品", 32
+    raise ValueError("不属于武器、防具、饰品或宠物装备。")
 
 
 def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dict[int, dict]:
@@ -557,7 +561,7 @@ def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dic
                 if category == "其他（可堆叠）":
                     if not other_group: continue
                 elif category == "装备":
-                    if item_category(item_type) not in {"武器", "防具", "饰品"}: continue
+                    if item_category(item_type) not in {"武器", "防具", "饰品", "宠物装备"}: continue
                 elif item_category(item_type) != category: continue
                 try: item_id, rarity = int(row[0]), int(row[3])
                 except (TypeError, ValueError): continue

@@ -269,7 +269,7 @@ class EditorState:
             if item_category == "消耗品" and not include_consumables: continue
             if item_category == "材料" and not include_materials or item_category == "珍宝" and not include_treasures: continue
             if item_id in self.other_stackable_catalog and not include_other_stackable: continue
-            if item_category in {"武器", "防具", "饰品"} and not include_equipment: continue
+            if item_category in {"武器", "防具", "饰品", "宠物装备"} and not include_equipment: continue
             if needle and needle not in str(item_id) and needle not in name.casefold(): continue
             if category != "全部" and item_category != category: continue
             rows.append({"index": index, "id": item_id, "name": name, "description": self.item_description(item_id), "category": item_category, "count": item.get("m_stack", 0), "modified": bool(item.get("modifyData"))})
@@ -280,12 +280,12 @@ class EditorState:
         if not include_consumables: categories.discard("消耗品")
         if not include_materials: categories.discard("材料")
         if not include_treasures: categories.discard("珍宝")
-        if not include_equipment: categories.difference_update({"武器", "防具", "饰品"})
+        if not include_equipment: categories.difference_update({"武器", "防具", "饰品", "宠物装备"})
         return {"items": rows, "categories": ["全部", *sorted(categories)]}
 
     def catalog(self, needle: str, include_books: bool = False, include_recipes: bool = False, include_consumables: bool = False, include_materials: bool = False, include_treasures: bool = False, include_other_stackable: bool = False, include_equipment: bool = False) -> list[dict]:
         needle = needle.casefold().strip()
-        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (include_equipment or category not in {"武器", "防具", "饰品"}) and (include_other_stackable or item_id not in self.other_stackable_catalog) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
+        return [{"id": item_id, "name": name, "description": self.item_description(item_id), "category": category} for item_id, (name, category) in sorted(self.item_catalog.items()) if (category != "武功秘籍" or include_books) and (category != "配方" or include_recipes) and (category != "消耗品" or include_consumables) and (category != "材料" or include_materials) and (category != "珍宝" or include_treasures) and (include_equipment or category not in {"武器", "防具", "饰品", "宠物装备"}) and (include_other_stackable or item_id not in self.other_stackable_catalog) and (not needle or needle in str(item_id) or needle in name.casefold())][:300]
 
     def item_description(self, item_id: int) -> str:
         return getattr(self, "item_descriptions", {}).get(item_id, "游戏资料中暂无文字说明。")
@@ -457,7 +457,7 @@ class EditorState:
 
     def change_equipment(self, data: dict) -> None:
         self.require_loaded(); item_id = int(data["id"])
-        if item_id not in self.equipment_catalog: raise ValueError("该 ID 不属于官方武器、防具或饰品。")
+        if item_id not in self.equipment_catalog: raise ValueError("该 ID 不属于官方武器、防具、饰品或宠物装备。")
         if data.get("action") == "add":
             self.inventory.append({"m_templeteId": item_id, "m_stack": 1, "modifyData": None, "IsNew": False, "IsForbidden": False})
         elif data.get("action") == "delete":
