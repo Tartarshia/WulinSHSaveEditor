@@ -74,7 +74,7 @@ class BrowserUiTests(unittest.TestCase):
             elif path == "/api/books":
                 data = dict(books=[dict(id=3, name="测试秘籍", group="内功", rarity=2, owned=False, description="测试说明")], total=1)
             elif path == "/api/equipment":
-                data = dict(rows=[dict(id=6, name="测试武器", group="武器", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True, extra_data=[dict(label="锻造等级（原值）", value="2"), dict(label="测试字段", value="<script>")]), dict(index=1, fingerprint="second", modified=False, extra_data=[])], description="防具说明")], total=2)
+                data = dict(rows=[dict(id=6, name="测试武器", group="武器 · 剑", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True, extra_data=[dict(label="锻造等级（原值）", value="2"), dict(label="测试字段", value="<script>")]), dict(index=1, fingerprint="second", modified=False, extra_data=[])], description="防具说明")], total=2)
             elif path == "/api/recipes":
                 data = dict(recipes=[dict(id=4, name="测试配方", group="食物", rarity=1, owned=False, description="测试说明")], total=1)
             elif path.startswith("/api/inventory-groups/"):
@@ -142,6 +142,7 @@ class BrowserUiTests(unittest.TestCase):
             page.locator('[data-tab="equipment"]').click()
             page.locator('#equipmentGroups .book-card').first.wait_for()
             self.assertEqual(page.locator('#equipmentGroups .book-card').count(), 4)
+            self.assertIn('武器 · 剑', page.locator('#equipmentGroups .group-toggle').first.inner_text())
             self.assertEqual(page.locator('[data-equipment="add"]').count(), 2)
             self.assertEqual(page.locator('[data-equipment="add"]').first.inner_text(), '添加1件')
             self.assertEqual(page.locator('[data-equipment="delete"]').first.inner_text(), '删除1件')

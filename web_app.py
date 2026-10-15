@@ -450,7 +450,7 @@ class EditorState:
             if needle and needle not in str(item_id) and needle not in name.casefold(): continue
             rows.append({"id": item_id, "name": name, "description": self.item_description(item_id), "copies": copies, **detail})
         order = {"武器": 0, "防具": 1, "饰品": 2}
-        rows.sort(key=lambda x: (order[x["group"]], -x["rarity"], x["id"]))
+        rows.sort(key=lambda x: (x.get("group_order", order.get(x["group"], 99)), -x["rarity"], x["id"]))
         return {"rows": rows, "total": len(self.equipment_catalog)}
 
     def change_equipment(self, data: dict) -> None:

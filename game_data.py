@@ -522,6 +522,18 @@ def stackable_other_group(item_type: str, name: str, fav_tags: str, stackable) -
     return None
 
 
+def equipment_group(item_type: str) -> tuple[str, int]:
+    kinds = {"Glove": "拳套", "Sword": "剑", "Blade": "刀", "Lance": "枪", "Staff": "棍",
+             "Fan": "扇", "Dagger": "匕首", "Brush": "笔", "Guqin": "琴", "Flute": "箫", "Pipa": "琵琶"}
+    category = item_category(item_type)
+    if category == "武器":
+        kind = item_type.removeprefix("Equip_Weapon_")
+        return "武器 · " + kinds.get(kind, "其他"), list(kinds).index(kind) if kind in kinds else len(kinds)
+    if category == "防具": return "防具", 20
+    if category == "饰品": return "饰品", 21
+    raise ValueError("不属于武器、防具或饰品。")
+
+
 def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dict[int, dict]:
     groups = {"Consumeable_Edible_Meal": "食物与酒水", "Consumeable_Edible_Medicine": "药品",
               "Consumeable_Edible_Fruit": "水果", "Consumeable_Edible_Elixir": "丹药",
@@ -549,8 +561,12 @@ def load_consumable_catalog(game_root: Path, category: str = "消耗品") -> dic
                 elif item_category(item_type) != category: continue
                 try: item_id, rarity = int(row[0]), int(row[3])
                 except (TypeError, ValueError): continue
-                group = item_category(item_type) if category == "装备" else other_group or consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
-                result[item_id] = {"rarity": rarity, "group": group}
+                if category == "装备":
+                    group, group_order = equipment_group(item_type)
+                    result[item_id] = {"rarity": rarity, "group": group, "group_order": group_order}
+                else:
+                    group = other_group or consumable_group(item_type, row[23], groups.get(item_type, "其他" + category))
+                    result[item_id] = {"rarity": rarity, "group": group}
             workbook.close()
             if result: return result
     raise RuntimeError(f"游戏 ModEditor 中没有找到{category}分类与品质资料")

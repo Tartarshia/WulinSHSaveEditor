@@ -2,10 +2,23 @@ import copy
 import unittest
 
 from web_app import EditorState
-from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat, stackable_other_group
+from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat, stackable_other_group, equipment_group
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_equipment_groups_use_official_weapon_types_then_rarity(self):
+        kinds = {"Glove": "拳套", "Sword": "剑", "Blade": "刀", "Lance": "枪", "Staff": "棍", "Fan": "扇", "Dagger": "匕首", "Brush": "笔", "Guqin": "琴", "Flute": "箫", "Pipa": "琵琶"}
+        for i, (key, name) in enumerate(kinds.items()):
+            self.assertEqual(equipment_group("Equip_Weapon_" + key), ("武器 · " + name, i))
+        self.assertEqual(equipment_group("Equip_Armor"), ("防具", 20))
+        self.assertEqual(equipment_group("Equip_Amulet"), ("饰品", 21))
+        with self.assertRaises(ValueError): equipment_group("Equip_Weapon_Pet")
+        self.state.equipment_catalog = {
+            20: {"group": "武器 · 剑", "group_order": 1, "rarity": 1},
+            21: {"group": "武器 · 刀", "group_order": 2, "rarity": 3},
+            22: {"group": "武器 · 剑", "group_order": 1, "rarity": 3}}
+        self.assertEqual([x["id"] for x in self.state.equipment()["rows"]], [22, 20, 21])
+
     def test_equipment_extra_data_displays_stored_values_without_mutation(self):
         data = {"forgeLevel": -1, "rawRnd": [.25, .5], "overrideBonus": None,
                 "forgeEffect": {"504": {"key": "攻击", "values": [50], "isValid": False}}, "unknown": "<test>"}
