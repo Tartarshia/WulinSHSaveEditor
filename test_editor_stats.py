@@ -2,10 +2,23 @@ import copy
 import unittest
 
 from web_app import EditorState
-from game_data import consumable_group, read_localized_item_info, plain_game_text
+from game_data import consumable_group, read_localized_item_info, plain_game_text, format_item_stat
 
 
 class EditorStatsTests(unittest.TestCase):
+    def test_effects_use_localized_names_and_preserve_sign_and_units(self):
+        names = {"B_NegBlind": "致盲", "B_NegPoison": "中毒", "生命": "生命上限"}
+        self.assertEqual(format_item_stat("D_Hp|2000", names, True), "气血恢复 2000")
+        self.assertEqual(format_item_stat("B_NegBlind|-100", names, True), "致盲 -100")
+        self.assertEqual(format_item_stat("B_BattleMedicine|1", names, True), "吃药次数 +1")
+        self.assertEqual(format_item_stat("D_Ep%|1", names, True), "内力恢复 100%")
+        self.assertEqual(format_item_stat("D_Hp%|0.15", names, True), "气血恢复 15%")
+        self.assertEqual(format_item_stat("B_NegPoison|5", names, True), "中毒 +5")
+        self.assertEqual(format_item_stat("生命|100", names), "生命上限 +100")
+        self.assertEqual(format_item_stat("能力经验_采集_采矿|100", names, True), "采矿经验 +100")
+        self.assertEqual(format_item_stat("B_NegBlind<100", names), "致盲<100")
+        self.assertIn("未识别属性", format_item_stat("B_Unknown|1", names, True))
+
     def test_departed_location_uses_saved_current_map_not_leave_or_respawn(self):
         self.state.map_names = {1: "测试当前地图", 2: "测试离队地图"}
         char = {"m_curMapId": 1, "m_curPos": {"x": 3, "y": 4}, "m_RespawnMap": 999, "m_TeamMemberState": {"isJoined": False, "leaveTeamMap": 2}}

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import struct
+from decimal import Decimal, InvalidOperation
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
@@ -41,6 +42,39 @@ def read_localized_item_info(raw: bytes, prefix: str = "ItemInfo_") -> dict[str,
     return result
 
 
+def format_item_stat(entry: str, property_names: dict[str, str] | None = None, direct: bool = False) -> str:
+    """Translate effect keys without treating state counters as healing amounts."""
+    aliases = {"D_Hp": "气血", "D_Ep": "内力", "D_Mp": "内力", "D_Exp": "实战经验",
+               "T_队伍体力": "队伍体力", "T_队伍心情": "队伍心情", "D_玩家关系": "玩家关系",
+               "B_BattleMedicine": "吃药次数", "B_集气": "集气"}
+    names = property_names or {}
+    def label(key):
+        if key in aliases: return aliases[key]
+        if names.get(key): return names[key]
+        if key.startswith("能力经验_"): return key.rsplit("_", 1)[-1] + "经验"
+        if re.search(r"[A-Za-z_]", key): return f"未识别属性（{key}）"
+        return key
+    key, separator, value = str(entry).partition("|")
+    if not separator:
+        comparison = re.fullmatch(r"(.+?)(>=|<=|==|≥|≤|>|<|=)(.+)", key)
+        if comparison: return label(comparison[1]) + comparison[2] + comparison[3]
+        return label(key)
+    percentage = key.endswith("%")
+    base_key = key.removesuffix("%")
+    name = label(base_key)
+    try:
+        amount = Decimal(value)
+        if not amount.is_finite(): raise InvalidOperation
+    except InvalidOperation:
+        return f"{name} {value}"
+    if percentage: amount *= 100
+    number = format(abs(amount), "f").rstrip("0").rstrip(".") if "." in format(abs(amount), "f") else format(abs(amount), "f")
+    suffix = "%" if percentage else ""
+    if direct and base_key in {"D_Hp", "D_Ep", "D_Mp", "T_队伍体力", "T_队伍心情"}:
+        return f"{name}{'恢复' if amount >= 0 else '减少'} {number}{suffix}"
+    return f"{name} {'+' if amount >= 0 else '-'}{number}{suffix}"
+
+
 def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = None) -> dict[int, str]:
     import UnityPy
     bundle = game_root / "Wulin_Data/StreamingAssets/aa/StandaloneWindows64/config_assets_all.bundle"
@@ -50,6 +84,7 @@ def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = N
         if obj.type.name == "MonoBehaviour" and obj.peek_name() == "LocData":
             raw = obj.get_raw_data()
             localized = read_localized_item_info(raw)
+            property_names = read_localized_item_info(raw, "CharPropName_")
             if map_names is not None:
                 for key, name in read_localized_item_info(raw, "MapName_").items():
                     if key.isdigit() and name: map_names[int(key)] = name
@@ -62,13 +97,8 @@ def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = N
             return json.loads(source.read(f"Assets/GameRes/json/1/{name}.txt").decode("utf-8-sig"))[name]
         items, buffs = table("ItemData"), {row["uName"]: row for row in table("BuffData")}
     result = {}
-    aliases = {"D_Hp": "气血", "D_Mp": "内力", "T_队伍体力": "队伍体力", "T_队伍心情": "队伍心情"}
-    def stats(values):
-        formatted = []
-        for entry in values or []:
-            key, separator, value = str(entry).partition("|")
-            formatted.append(f"{aliases.get(key, key)} {value}" if separator else key)
-        return "、".join(formatted)
+    def stats(values, direct=False):
+        return "、".join(format_item_stat(entry, property_names, direct) for entry in values or [])
     for row in items:
         try: item_id = int(row["uid"])
         except (TypeError, ValueError): continue
@@ -79,7 +109,7 @@ def load_item_descriptions(game_root: Path, map_names: dict[int, str] | None = N
         effects = []
         for buff_name in str(row.get("consumeEffect") or "").split(","):
             effects.extend(buffs.get(buff_name, {}).get("instantEffect") or [])
-        if effects: lines.append("使用直接效果（表中值）：" + stats(effects))
+        if effects: lines.append("使用直接效果（表中值）：" + stats(effects, direct=True))
         if row.get("kungfuLearn"): lines.append("可学习武功：" + row["kungfuLearn"])
         result[item_id] = "\n".join(lines)
     # The shipped JSON may lag the spreadsheet for DLC/newly added items.
