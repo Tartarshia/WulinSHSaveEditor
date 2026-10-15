@@ -130,7 +130,7 @@ class BrowserUiTests(unittest.TestCase):
                 for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "relations", "factions"]:
                     page.locator(f'[data-tab="{tab}"]').click()
                     page.wait_for_timeout(40)
-                    self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (width, tab))
+                    self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), (width, tab))
                     rect = page.locator("#statusBar").bounding_box()
                     self.assertAlmostEqual(rect["y"] + rect["height"], 900, delta=1)
                     self.assertGreaterEqual(page.evaluate("parseFloat(getComputedStyle(document.body).paddingBottom)"), rect["height"])
