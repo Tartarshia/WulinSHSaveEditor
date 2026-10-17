@@ -50,6 +50,23 @@ def readonly_reason(row):
     return ""
 
 
+def status_conditions(row):
+    """Only state conditions supported by the exported fields or game wording."""
+    notes = []
+    scripts = tokens(row.get("dynamicModifier"))
+    if "Traits/SiLiTaoSheng" in scripts:
+        notes.append("触发条件：每场战斗中首次遭遇致命伤害；效果：保留 1 点血量。")
+    elif "NpcTraits/SiLiTaoSheng" in scripts:
+        notes.append("触发条件：受到致命一击；效果：保留 1 点血量，每场战斗生效 1 次。")
+    if row.get("tagsForActive"):
+        notes.append("生效所需标签（游戏原值）：" + "、".join(tokens(row["tagsForActive"])))
+    if row.get("tagsNotActive"):
+        notes.append("阻止生效的标签（游戏原值）：" + "、".join(tokens(row["tagsNotActive"])))
+    if scripts and not notes:
+        notes.append("触发条件：由游戏脚本判定，请参照悬停说明；导出表未提供可独立解析的条件。")
+    return notes
+
+
 def load_status_catalog(game_root: Path):
     from game_data import read_localized_item_info, plain_game_text
     import UnityPy
@@ -138,6 +155,9 @@ def list_statuses(hero, catalog, query="", kind="all", source="all", sort="defau
                          permanent=detail["permanent"], owned=bool(instances), active=any(x.get("isValid") for x in instances),
                          records=len(instances), remaining=[x.get("lifeTime") for x in instances],
                          lifetime=detail.get("lifeTime"), tick=detail.get("tickType", ""),
+                         conditions=status_conditions(detail),
+                         readonly_detail=("此效果依赖游戏脚本响应战斗事件或计算属性；仅增删存档中的状态记录不能保证正确初始化或清理，因此暂不允许修改。"
+                                          if detail.get("dynamicModifier") else ""),
                          readonly=instance_reason(detail, library, instances)))
     sources = list(dict.fromkeys(["创建角色可选", *[x["source"] for x in rows]]))
     total, owned = len(rows), sum(x["owned"] for x in rows)

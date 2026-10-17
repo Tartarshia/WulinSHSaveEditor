@@ -61,6 +61,8 @@ class BrowserUiTests(unittest.TestCase):
                                  rarity=rarity, order=len(statuses), owned=owned, active=owned, source=source,
                                  permanent=permanent, creation=["创建天赋"] if key == "normal" else [],
                                  readonly="特殊状态只读" if key == "readonly" else "", remaining=[1] if owned else [],
+                                 conditions=['触发条件：每场战斗首次遭遇致命伤害'] if key == 'readonly' else [],
+                                 readonly_detail='仅增删记录不能保证脚本正确初始化' if key == 'readonly' else '',
                                  lifetime=1 if permanent else 48, tick="Infinite" if permanent else "Time"))
 
         def respond(route):
@@ -235,6 +237,11 @@ class BrowserUiTests(unittest.TestCase):
             page.locator('[data-tab="statuses"]').click()
             page.locator('#missingStatusGroups [data-status-toggle="normal"]').wait_for()
             self.assertTrue(page.locator('[data-status-toggle="readonly"]').is_disabled())
+            special = page.locator('.status-card[data-status-key="readonly"]')
+            self.assertIn('触发条件：每场战斗首次遭遇致命伤害', special.inner_text())
+            special.hover()
+            page.locator('#statusTooltip').wait_for(state='visible')
+            self.assertIn('不能保证脚本正确初始化', page.locator('#statusTooltip').inner_text())
             self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="active"]').is_checked())
             card = page.locator('.status-card[data-status-key="normal"]')
             self.assertNotIn('悬停状态说明', card.inner_text())

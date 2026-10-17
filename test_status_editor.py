@@ -6,10 +6,19 @@ from pathlib import Path
 import threading
 import re
 
-from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog
+from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_script_conditions_are_separate_from_editing_restriction(self):
+        row = dict(dynamicModifier=['Traits/SiLiTaoSheng'])
+        self.assertIn('首次遭遇致命伤害', status_conditions(row)[0])
+        self.assertIn('每场战斗', status_conditions(row)[0])
+        self.assertIn('只读', readonly_reason(row))
+        self.assertIn('未提供', status_conditions(dict(dynamicModifier=['Unknown/Script']))[0])
+        self.assertEqual(status_conditions({}), [])
+        self.assertIn('免疫', status_conditions(dict(tagsNotActive=['免疫']))[0])
+
     def test_catalog_merges_multiple_official_workbooks_and_creation_links(self):
         class Sheet:
             def __init__(self, header, rows): self.header, self.rows = header, rows
