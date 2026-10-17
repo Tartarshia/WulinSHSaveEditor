@@ -84,11 +84,52 @@ def local_trigger_reference(row):
     return [hint[1]]
 
 
+def description_trigger_reference(row):
+    """Extract explicit trigger sentences, not lore or an imagined script rule.
+
+    The UI labels these as game wording rather than exhaustive graph analysis.
+    Preserve qualifiers (probability, limits, durations) in the same sentence.
+    """
+    text = row.get('description', '')
+    if not isinstance(text, str) or len(text) > 6000 or '{' in text or '}' in text: return []
+    markers = (
+        r'(?:每次|每|被|受到|自身|敌方|对方)?攻击(?:时|后|命中)',
+        r'(?:进入战斗后|每次行动后|每回合开始|每回合结束|战斗胜利后)',
+        r'(?:受到致命一击|遭受侧击时|遭受背击时|触发暴击时|触发格挡)',
+        r'(?:生命值?[低高]于\d|生命[低高]于\d|满血时)',
+        r'(?:对动物类敌人|对女性角色|攻击女性敌人|受到女性攻击时)',
+        r'(?:每[多有]\d*名|每[高剩余多]\d*点|每\d+点体质|每拥有\d+文)',
+        r'(?:同阵营且存活|在场存活|处于[“「])',
+        r'(?:施展用毒后|施展治疗后|施展暗器后|使用暗器后|每次入睡)',
+        r'(?:每次攻击|每被攻击\d+次|每攻击\d+次|每命中\d+次|命中敌方目标时|挨打后)',
+        r'(?:触发怒气后|攻击或受击后|受到[男女]性敌人攻击|生命值为满时)',
+        r'(?:每多一名|每有一名|每存活一名|剩余生命越少|对[于]?低于自身)',
+        r'(?:首次行动后|每次行动结束后|每次行动恢复|每次轮到行动时|行动后恢复)',
+        r'(?:每经过一天|每天自动|每过一天|收为宠物后|加入(?:主角)?队伍后)',
+        r'(?:能力低于\d+级时|名声等级低于\d+级时|\d+级以前|每受到\d+点)',
+        r'(?:同队战斗时|同队战斗且|相邻时|手持.*武器|以木剑为武器)',
+        r'(?:仅动物类角色生效|主内功为[阴阳]|主内功调和时|独自一人行走江湖时)',
+        r'(?:战斗期间每击杀|每场战斗首次被攻击|进入战斗前三次行动)',
+    )
+    sentences = [part.strip() for part in re.split(r'[。；;\n]', text) if part.strip()]
+    selected = [part for part in sentences if any(re.search(pattern, part) for pattern in markers)]
+    if not selected: return []
+    # Include the entire sentence so a cap or exception is not silently dropped.
+    return ['触发／加成依据（游戏说明）：' + '；'.join(selected) + '。']
+
+
 def readable_runtime_summary(branches):
     """Small, strict human-language whitelist. Never expose raw graphs as prose."""
     if any(not branch.get('complete') for branch in branches): return []
     useful = [branch for branch in branches if branch.get('path') and
               branch.get('conditions') != ['此脚本分支没有额外条件项（不代表状态可自动获得）']]
+    if len(useful) > 1:
+        summaries = [readable_runtime_summary([branch]) for branch in useful]
+        if any(not summary for summary in summaries): return []
+        # Different scripts can process different effects, not alternative ways
+        # to acquire the entire status. Do not flatten them into an OR gate.
+        return ['触发参考：' + '；'.join(dict.fromkeys(summary[0].removeprefix('触发参考：').rstrip('。')
+                                                   + '（结算对应效果）' for summary in summaries)) + '。']
     if len(useful) != 1 or not useful[0].get('complete'): return []
     branch = useful[0]
     notes = []
@@ -105,6 +146,19 @@ def readable_runtime_summary(branches):
         elif text == '当前动作类别：任意；限 暗器': notes.append('使用暗器时')
         elif text == '当前动作类别：任意；限 治疗': notes.append('施展治疗时')
         elif text == '当前行动者为状态持有者': notes.append('轮到自身行动时')
+        elif text == '战斗受击者·Boss角色 = 0': notes.append('目标不是首领')
+        elif text == '战斗受击者·性别 = 动物': notes.append('攻击动物类目标')
+        elif text == '0 ≤ 战斗受击者·性别 ≤ 1': notes.append('攻击人类目标')
+        elif text == '持有者·性别 = 动物': notes.append('自身为动物')
+        elif text == '持有者·内功效果封印 = 0': notes.append('自身内功效果未被封印')
+        elif text == '持有者·神鹰大侠 = 1': notes.append('自身具有神鹰大侠标记')
+        elif text == '战场·全场扫描·女性队友 = 0': notes.append('战场上没有女性队友')
+        elif text == '战场临时属性·持有者·行动次数 = 10': notes.append('本场战斗第十次行动结束')
+        elif text == '1 ≤ 主角·当前生命 ≤ 99999': notes.append('主角仍存活')
+        elif re.fullmatch(r'(?:15|30) ≤ 战斗攻击者·等级-战斗受击者·等级 ≤ 99999',text):
+            notes.append('自身等级至少高于目标 ' + text.split(' ')[0] + ' 级')
+        elif re.fullmatch(r'0 ≤ 与[^·≤]+的战场距离 ≤ 2',text):
+            notes.append('与' + text.split('与',1)[1].split('的战场距离')[0] + '的距离不超过 2 格')
         elif text == '持有者·战斗临时记录·外功出手次数 = 1': notes.append('本场战斗第一次使用外功')
         elif text == '持有者·战斗临时记录·出手次数 = 1': notes.append('本场战斗首次出手')
         elif text == '持有者·战斗临时记录·出手前移动距离 = 0': notes.append('本次行动尚未移动')
@@ -114,8 +168,11 @@ def readable_runtime_summary(branches):
             event = text.removeprefix('本次伤害判定：')
             mapping = {'发生暴击':'攻击触发暴击','未发生暴击':'攻击未触发暴击',
                        '发生格挡':'攻击被格挡','发生闪避':'攻击被闪避',
-                       '发生击杀':'击败敌人','发生连击':'攻击触发连击','发生反击':'触发反击'}
-            if event not in mapping or any('受击方' in stage for stage in branch['timing']): return []
+                       '发生击杀':'击败敌人','发生连击':'攻击触发连击','发生反击':'触发反击','发生命中':'攻击命中目标'}
+            if any('受击方' in stage for stage in branch['timing']):
+                mapping = {'发生格挡':'受到攻击并触发格挡','发生闪避':'受到攻击并成功闪避',
+                           '发生暴击':'受到暴击','发生命中':'受到攻击且被命中'}
+            if event not in mapping: return []
             notes.append(mapping[event])
         else: return []
     if not notes: return []

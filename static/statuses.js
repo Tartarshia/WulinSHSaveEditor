@@ -13,6 +13,7 @@ function showStatusTooltip(card){
  if(row.condition_source)notes.push('依据：游戏内属性条件表。');
  if(row.trigger_source)notes.push('依据：游戏内状态说明。');
  if(row.conditions?.some(text=>text.startsWith('触发参考：')))notes.push('触发参考根据游戏配置整理，尚未在游戏内验证。');
+ if(row.conditions?.some(text=>text.startsWith('触发／加成依据（游戏说明）：')))notes.push('以上摘取游戏说明中的触发或加成依据，不代表全部脚本限制均已核实。');
  if(row.unlock_source)notes.push('开局天赋解锁不等于当前存档自动获得状态。');
  if(row.reference_warning)notes.push('Wiki 获得路线仅供参考，可能受版本、门派或剧情进度影响。');
  if(row.readonly_detail)notes.push(row.readonly_detail);

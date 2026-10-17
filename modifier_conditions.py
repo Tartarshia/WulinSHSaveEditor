@@ -12,8 +12,10 @@ import struct
 
 
 class OdinReader:
-    def __init__(self, data):
-        if len(data) > 2_000_000: raise ValueError("modifier too large")
+    def __init__(self, data, *, table=False):
+        if len(data) > (16_000_000 if table else 2_000_000): raise ValueError("modifier too large")
+        self.entry_limit = 1_000_000 if table else 20000
+        self.array_limit = 50000 if table else 10000
         self.data, self.pos, self.types, self.count = bytes(data), 0, {}, 0
 
     def take(self, count):
@@ -46,7 +48,7 @@ class OdinReader:
 
     def entry(self, depth=0):
         self.count += 1
-        if depth > 64 or self.count > 20000: raise ValueError('modifier nesting limit')
+        if depth > 64 or self.count > self.entry_limit: raise ValueError('modifier nesting limit')
         code = self.number('B')
         if code in (5, 7, 0x31): return code, None, None
         named = code in (1, 3) or 9 <= code <= 0x2d and code % 2 == 1 or code == 0x32
@@ -66,7 +68,7 @@ class OdinReader:
             return code, name, value
         if code == 6:
             length = self.number('q')
-            if not 0 <= length <= 10000: raise ValueError('array limit')
+            if not 0 <= length <= self.array_limit: raise ValueError('array limit')
             values = []
             for _ in range(length):
                 child_code, child_name, child = self.entry(depth + 1)
@@ -117,6 +119,32 @@ def list_values(node):
     raise ValueError('unsupported list structure')
 
 
+def read_runtime_tables(env, wanted):
+    """Read primary rows of installed tables; ignore redundant lookup indexes.
+
+    This deliberately returns typed fields, not executable game objects. Failures
+    are isolated per table and never replaced with guessed data.
+    """
+    result = {}
+    for obj in env.objects:
+        if obj.type.name != 'MonoBehaviour': continue
+        name = obj.peek_name()
+        if name not in wanted: continue
+        try:
+            tree = obj.read_typetree()
+            serial = tree.get('serializationData', {})
+            if serial.get('SerializedFormat') != 0: continue
+            reader = OdinReader(serial.get('SerializedBytes', []), table=True)
+            _, root_name, root = reader.entry()
+            if root_name != name: continue
+            rows = [fields(row) for row in list_values(root)]
+            if not all(isinstance(row.get('UName'), str) for row in rows): continue
+            result[name] = rows
+        except (ValueError, KeyError, TypeError, UnicodeError, struct.error, OverflowError):
+            continue
+    return result
+
+
 def read_runtime_modifiers(env, wanted):
     """Resolve full asset paths, not ambiguous names or stale ModEditor examples."""
     result = {}
@@ -137,7 +165,8 @@ def read_runtime_modifiers(env, wanted):
                 if serial.get('SerializedFormat') != 0: continue
                 decoded = OdinReader(serial.get('SerializedBytes', [])).read()
                 result[key] = dict(path=path, conditions=list_values(decoded['conditions']),
-                                   stages=tree.get('activeStages', []))
+                                   stages=tree.get('activeStages', []),
+                                   actions=list_values(decoded['actions']) if 'actions' in decoded else [])
             except (ValueError, KeyError, TypeError, UnicodeError, struct.error, OverflowError):
                 continue
     return result

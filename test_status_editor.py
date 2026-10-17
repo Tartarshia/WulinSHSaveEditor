@@ -10,11 +10,71 @@ import struct
 from decimal import Decimal
 
 from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
-from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary
-from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition
+from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary, description_trigger_reference
+from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition, read_runtime_tables
+from status_sources import source_notes, modifier_source_notes
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_modifier_sources_reject_random_and_unknown_targets(self):
+        action=dict(type='WuLin.ApplyBuffToCharacterAction, ModShare.Runtime',fields=dict(
+            useRandomBuff=False,buffName='child',buffTarget=dict(fields=dict(target=2))))
+        catalog=dict(parent=dict(key='parent',name='原状态',dynamicModifier=['x']),child=dict(key='child',name='附属'))
+        runtime=dict(x=dict(actions=[action]))
+        self.assertIn('受击者',modifier_source_notes(catalog,runtime)['child'][0])
+        action['fields']['useRandomBuff']=True
+        self.assertEqual(modifier_source_notes(catalog,runtime),{})
+        action['fields']['useRandomBuff']=False
+        action['fields']['buffTarget']['fields']['target']=99
+        self.assertEqual(modifier_source_notes(catalog,runtime),{})
+
+    def test_readable_scripts_preserve_attack_defence_and_separate_effects(self):
+        def branch(timing,conditions): return dict(path='x',complete=True,timing=[timing],conditions=conditions)
+        attack=branch('攻击方伤害计算前',['随机触发概率 15%','15 ≤ 战斗攻击者·等级-战斗受击者·等级 ≤ 99999','战斗受击者·Boss角色 = 0'])
+        text=readable_runtime_summary([attack])[0]
+        for word in ('15%','15 级','不是首领'): self.assertIn(word,text)
+        defence=branch('受击方伤害计算后',['本次伤害判定：发生格挡'])
+        text=readable_runtime_summary([attack,defence])[0]
+        self.assertIn('受到攻击并触发格挡',text)
+        self.assertIn('结算对应效果',text)
+        self.assertNotIn('或者',text)
+        self.assertEqual(readable_runtime_summary([defence,branch('未知',['未识别'])]),[])
+
+    def test_explicit_description_conditions_preserve_probability_and_limits(self):
+        text='处于“酩酊”状态时，触发暴击时有25%概率造成10点内伤，每场战斗仅1次。'
+        self.assertIn(text, description_trigger_reference(dict(description=text))[0])
+        self.assertEqual(description_trigger_reference(dict(description='格挡与闪避降低。')), [])
+        self.assertEqual(description_trigger_reference(dict(description='攻击时增加{value}点伤害')), [])
+        notes=status_conditions(dict(dynamicModifier=['x'],description='每天自动获得1贯钱。'))
+        self.assertIn('游戏说明', notes[0])
+        self.assertNotIn('未解析', notes[0])
+
+    def test_runtime_sources_do_not_invent_recipient_or_unlock_level(self):
+        def array(items): return dict(fields={},items=[items])
+        tables=dict(ItemData=[dict(UName='药',EquipBuff=['装备状态'],ConsumeEffect=dict(fields=dict(refNames=array(['中毒']))))],
+                    KungfuData=[dict(UName='内功',ActiveInternalBuffs=['内功状态'],CastBuffs=['招式状态'])],
+                    CharacterPetExtendData=[dict(UName='宠物',AbilityBuffs=array([dict(fields=dict(key='宠物状态',isValid=True,values=[5]))]))])
+        notes=source_notes(tables)
+        self.assertIn('对象以物品用法为准',notes['中毒'][0])
+        self.assertIn('设为主内功',notes['内功状态'][0])
+        self.assertNotIn('5级',notes['宠物状态'][0])
+        # Source discovery must not hide a genuinely unknown activation trigger.
+        result=status_conditions(dict(dynamicModifier=['x'],source_notes=notes['装备状态']))
+        self.assertIn('激活条件：暂未解析。',result)
+
+    def test_runtime_table_primary_root_and_strict_default_bounds(self):
+        def string(value): return b'\x00'+struct.pack('<i',len(value))+value.encode('ascii')
+        data=b'\x01'+string('Test')+b'\x2f'+struct.pack('<i',0)+string('Rows')+struct.pack('<i',0)
+        data+=b'\x06'+struct.pack('<q',0)+b'\x07\x05'
+        obj=SimpleNamespace(type=SimpleNamespace(name='MonoBehaviour'),peek_name=lambda:'Test',
+                            read_typetree=lambda:dict(serializationData=dict(SerializedFormat=0,SerializedBytes=data)))
+        self.assertEqual(read_runtime_tables(SimpleNamespace(objects=[obj]),{'Test'}),{'Test':[]})
+        self.assertEqual(read_runtime_tables(SimpleNamespace(objects=[obj]),{'Other'}),{})
+        obj.read_typetree=lambda:dict(serializationData=dict(SerializedFormat=0,SerializedBytes=data[:-1]))
+        self.assertEqual(read_runtime_tables(SimpleNamespace(objects=[obj]),{'Test'}),{})
+        with self.assertRaises(ValueError): OdinReader(bytes(2_000_001))
+        with self.assertRaises(ValueError): OdinReader(bytes(16_000_001),table=True)
+
     def test_human_conditions_story_variants_and_no_diagnostic_filler(self):
         row=dict(key='剧情博采众长', uName='剧情博采众长', id=13529, description='外功到第十重，内功到第十重。', dynamicModifier=['script'])
         notes=status_conditions(row)

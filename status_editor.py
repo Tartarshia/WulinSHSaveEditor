@@ -7,8 +7,9 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
-from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary
+from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary, description_trigger_reference
 from modifier_conditions import read_runtime_modifiers, explain_modifiers
+from status_sources import read_source_notes, modifier_source_notes
 
 
 def tokens(value):
@@ -87,8 +88,11 @@ def status_conditions(row):
     if scripts and not notes:
         notes.extend(readable_runtime_summary(row.get('runtime_conditions', [])))
     if scripts and not notes:
+        notes.extend(description_trigger_reference(row))
+    if scripts and not notes:
         notes.append("激活条件：暂未解析。")
-    return notes
+    # Provenance is useful but never a substitute for an unknown trigger.
+    return list(dict.fromkeys(row.get('source_notes', []) + notes))
 
 
 def load_status_catalog(game_root: Path):
@@ -188,8 +192,11 @@ def load_status_catalog(game_root: Path):
     if character_names.get('10136') == '已占用': character_names['10136'] = '纪茯苓'
     wanted = {script for row in result.values() for script in row['dynamicModifier']}
     runtime = read_runtime_modifiers(env, wanted)
+    sources = read_source_notes(env)
+    linked_sources = modifier_source_notes(result, runtime)
     for row in result.values():
         row['runtime_conditions'] = explain_modifiers(row['dynamicModifier'], runtime, character_names)
+        row['source_notes'] = sources.get(row['key'], []) + linked_sources.get(row['key'], [])
     return result
 
 
