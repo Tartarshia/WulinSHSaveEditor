@@ -8,6 +8,7 @@ from zipfile import ZipFile
 
 from openpyxl import load_workbook
 from status_reference import acquisition_reference, local_trigger_reference
+from modifier_conditions import read_runtime_modifiers, explain_modifiers, compact_condition
 
 
 def tokens(value):
@@ -33,6 +34,7 @@ def numeric_effects(row):
 def readonly_reason(row):
     if row.get("unknown"): return "当前游戏表中未找到定义，仅显示存档记录"
     if row.get("property_requirements"): return "由属性达标自动获得或移除，只读"
+    if row.get("origin_notes"): return "由结义组合系统管理，只读"
     if row.get("displayType") in {"经脉", "家园"}: return "由经脉或家园系统管理，只读"
     if str(row.get("uName", "")).startswith("剧情"): return "剧情联动状态，只读"
     key = str(row.get("uName", ""))
@@ -81,6 +83,15 @@ def status_conditions(row):
     notes.extend(local_trigger_reference(row))
     notes.extend(row.get("unlock_conditions", []))
     notes.extend(row.get("reference_notes", []))
+    notes.extend(row.get("origin_notes", []))
+    branches = row.get("runtime_conditions", [])
+    available = [branch for branch in branches if branch.get("path")]
+    if scripts and not notes and available:
+        for index, branch in enumerate(available[:2], 1):
+            timing = '／'.join(branch['timing']) or '未知回调'
+            notes.append(f"条件摘要·配置推导·分支 {index}（{timing}）：" + '；且'.join(compact_condition(text) for text in branch['conditions']))
+        if len(available) > 2: notes.append(f"另有 {len(available)-2} 个独立脚本分支，详见悬停说明。")
+        if any(not branch['complete'] for branch in branches): notes.append("仍有未翻译的脚本条件，详见悬停说明。")
     if scripts and not notes:
         notes.append("激活条件：暂未解析。")
     return notes
@@ -92,13 +103,15 @@ def load_status_catalog(game_root: Path):
     tables = {}
     with ZipFile(game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip") as archive:
         for info in archive.infolist():
+            if info.filename.replace("\\", "/").endswith("/json/1/SwornComboConfig.txt"):
+                tables["SwornComboConfig"] = json.loads(archive.read(info).decode("utf-8-sig"))["SwornComboConfig"]
             if info.filename.replace("\\", "/").endswith("/json/1/AchievementData.txt"):
                 tables["AchievementData"] = json.loads(archive.read(info).decode("utf-8-sig"))["AchievementData"]
             if info.filename.replace("\\", "/").endswith("/json/1/SelfPropBufflData.txt"):
                 tables["SelfPropBufflData"] = json.loads(archive.read(info).decode("utf-8-sig"))["SelfPropBufflData"]
             if not info.filename.endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"): continue
             workbook = load_workbook(BytesIO(archive.read(info)), read_only=True, data_only=True)
-            for name in ("BuffData", "TraitData"):
+            for name in ("BuffData", "TraitData", "CharacterPoolData"):
                 if name not in workbook.sheetnames: continue
                 sheet = workbook[name]
                 headers = next(sheet.iter_rows(min_row=3, max_row=3, max_col=25, values_only=True))
@@ -123,6 +136,16 @@ def load_status_catalog(game_root: Path):
     for rule in tables.get("SelfPropBufflData", []):
         for key in tokens(rule.get("getBuff")):
             property_rules.setdefault(key, []).append(tokens(rule.get("propRequire")))
+    combo_rules = {}
+    for rule in tables.get('SwornComboConfig', []):
+        members = tokens(rule.get('Ids'))
+        labels = [dict(DLC2纪茯苓='纪茯苓', 无名小村包打听='包打听').get(name, name) for name in members]
+        for key in tokens(rule.get('comboBuffs')):
+            if len(labels) == 2:
+                text = '结义组合来源：' + '、'.join(labels) + '均已结义且同队参战；额外触发判定见各脚本分支。'
+            else:
+                text = '结义组合成员：' + '、'.join(labels) + '；结义及同队人数的分档效果见游戏说明。'
+            combo_rules.setdefault(key, []).append(text)
     trait_buffs = {str(row.get("uid")): tokens(row.get("bonusBuff")) for row in tables["TraitData"] if flag(row.get("isUseByPlayer"))}
     unlock_rules = {}
     for rule in tables.get("AchievementData", []):
@@ -154,16 +177,25 @@ def load_status_catalog(game_root: Path):
         row.update(id=uid, key=key, rarity=rarity, order=index,
                    property_requirements=property_rules.get(key, []),
                    unlock_conditions=unlock_rules.get(key, []),
+                   origin_notes=combo_rules.get(key, []),
                    name=plain_game_text(names.get(loc, key)),
                    description=plain_game_text(descriptions.get(loc, "游戏资源中暂无文字说明。")),
                    creation=creation.get(key, []),
                    source="创建角色可选" if key in creation else str(row.get("displayType") or "其他状态"),
                    permanent=str(row.get("tickType", "")).casefold() == "infinite")
         row["reference_notes"], row["condition_references"] = acquisition_reference(row)
+        if row['origin_notes']:
+            row['condition_references'].append(dict(title='Wiki · 结义规则（组合成员以本机表为准）', url='https://heros-adventure.wikidot.com/jieyi', checked='2026-10-17'))
         row["readonly"] = readonly_reason(row)
         if not row["isVisible"] and not row["creation"]:
             row["readonly"] = "游戏内部隐藏状态，只读"
         result[key] = row
+    character_names = {str(row.get('uid')):str(row.get('uName')) for row in tables.get('CharacterPoolData', [])}
+    if character_names.get('10136') == '已占用': character_names['10136'] = '纪茯苓'
+    wanted = {script for row in result.values() for script in row['dynamicModifier']}
+    runtime = read_runtime_modifiers(env, wanted)
+    for row in result.values():
+        row['runtime_conditions'] = explain_modifiers(row['dynamicModifier'], runtime, character_names)
     return result
 
 
@@ -203,6 +235,8 @@ def list_statuses(hero, catalog, query="", kind="all", source="all", sort="defau
                          records=len(instances), remaining=[x.get("lifeTime") for x in instances],
                          lifetime=detail.get("lifeTime"), tick=detail.get("tickType", ""),
                          conditions=status_conditions(detail),
+                         runtime_conditions=detail.get('runtime_conditions', []),
+                         origin_notes=detail.get('origin_notes', []),
                          condition_references=detail.get("condition_references", []),
                          reference_warning="社区资料仅说明获得路线，不代表所有脚本判定已经核验；门派、剧情及版本差异仍以游戏为准。" if detail.get("reference_notes") else "",
                          unlock_source="开局解锁来源：本机官方 AchievementData → TraitData → bonusBuff；不等于当前存档自动获得状态。" if detail.get("unlock_conditions") else "",

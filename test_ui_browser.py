@@ -65,6 +65,7 @@ class BrowserUiTests(unittest.TestCase):
                                  condition_source='官方属性条件表 SelfPropBufflData' if key == 'readonly' else '',
                                  tag_conditions=['额外限制：存在以下标签时不生效：测试标签'] if key == 'readonly' else [],
                                  condition_references=[dict(title='Wiki 参考', url='https://heros-adventure.wikidot.com/traits', checked='2026-10-17')],
+                                 runtime_conditions=[dict(script='测试/<script>', timing=['行动结束时'], conditions=['0% ≤ 生命比例 ≤ 30%'], complete=False, path='Assets/test.asset')] if key=='readonly' else [],
                                  readonly_detail='仅增删记录不能保证脚本正确初始化' if key == 'readonly' else '',
                                  lifetime=1 if permanent else 48, tick="Infinite" if permanent else "Time"))
 
@@ -270,6 +271,10 @@ class BrowserUiTests(unittest.TestCase):
             self.assertIn('不能保证脚本正确初始化', page.locator('#statusTooltip').inner_text())
             self.assertIn('SelfPropBufflData', page.locator('#statusTooltip').inner_text())
             self.assertIn('测试标签', page.locator('#statusTooltip').inner_text())
+            self.assertIn('脚本配置推导', page.locator('#statusTooltip').inner_text())
+            self.assertIn('仍含未翻译项', page.locator('#statusTooltip').inner_text())
+            self.assertIn('0% ≤ 生命比例 ≤ 30%', page.locator('#statusTooltip').inner_text())
+            self.assertEqual(page.locator('#statusTooltip script').count(), 0)
             self.assertEqual(page.locator('#statusTooltip a').get_attribute('href'), 'https://heros-adventure.wikidot.com/traits')
             self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="active"]').is_checked())
             card = page.locator('.status-card[data-status-key="normal"]')

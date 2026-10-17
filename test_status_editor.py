@@ -6,12 +6,59 @@ from types import SimpleNamespace
 from pathlib import Path
 import threading
 import re
+import struct
+from decimal import Decimal
 
 from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
 from status_reference import acquisition_reference, local_trigger_reference
+from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_bounded_odin_reader_decimals_strings_and_fail_closed(self):
+        def string(value, wide=True):
+            return bytes([int(wide)]) + struct.pack('<i', len(value)) + value.encode('utf-16-le' if wide else 'latin-1')
+        # Named string followed by a named decimal in CLR memory layout.
+        data = b'\x27' + string('label', False) + string('测试范围')
+        data += b'\x23' + string('min') + struct.pack('<IIII', 0x80010000, 0, 125, 0)
+        self.assertEqual(OdinReader(data).read(), dict(label='测试范围', min=Decimal('-12.5')))
+        maximal = b'\x23' + string('x') + struct.pack('<IIII', 0, 0xffffffff, 0xffffffff, 0xffffffff)
+        self.assertEqual(OdinReader(maximal).read()['x'], Decimal('79228162514264337593543950335'))
+        for bad in (data[:-1], b'\xff', b'\x27\x01\xff\xff\xff\x7f', b'\x31trailing'):
+            with self.assertRaises(ValueError): OdinReader(bad).read()
+        with self.assertRaises(ValueError): OdinReader(bytes(2_000_001))
+        self.assertEqual(OdinReader(b'\x09'+string('ref')+struct.pack('<i', 3)).read()['ref'], {'reference':3})
+        nested = b'\x01' + string('conditions') + b'\x2f' + struct.pack('<i',0) + string('List') + struct.pack('<i',0)
+        nested += b'\x06' + struct.pack('<q',1) + b'\x28' + string('条件') + b'\x07\x05'
+        self.assertEqual(OdinReader(nested).read()['conditions']['items'], [['条件']])
+        for bad in (nested[:-1], nested.replace(b'\x07\x05', b'\x05\x05')):
+            with self.assertRaises(ValueError): OdinReader(bad).read()
+
+    def test_runtime_modifier_conditions_keep_branch_logic_and_full_bounds(self):
+        def node(kind, **values): return dict(type='WuLin.'+kind+', ModShare.Runtime', fields=values, items=[])
+        expression = node('SimpleEvalValueMatchedCondition', eval=node('Eval', evalStr='【持有者_Hp】/【持有者_生命】'), minValue=Decimal('-999'), maxValue=Decimal('.3'))
+        self.assertIn('30.0%', explain_condition(expression, {}))
+        self.assertIn('-99900%', explain_condition(expression, {}))
+        self.assertNotIn('-99900%', compact_condition(explain_condition(expression, {})))
+        runtime = {'a':dict(path='Assets/a.asset', stages=[200], conditions=[expression]),
+                   'b':dict(path='Assets/b.asset', stages=[208], conditions=[node('UnknownCondition')]),
+                   'c':dict(path='Assets/c.asset', stages=[205], conditions=[])}
+        result = explain_modifiers(['a','b','c','missing'], runtime)
+        self.assertTrue(result[0]['complete'])
+        self.assertFalse(result[1]['complete'])
+        self.assertFalse(result[3]['complete'])
+        self.assertEqual(result[0]['timing'], ['进入战斗时'])
+        self.assertIn('不代表状态可自动获得', result[2]['conditions'][0])
+        invalid_group=node('BattleActorCheckLabelCondition', checkGroups=[['a'],['b']])
+        with self.assertRaises(ValueError): explain_condition(invalid_group,{})
+        check = node('CheckDamageCondition', checkDict=[node('', **{'$k':5,'$v':0})])
+        self.assertIn('未发生暴击', explain_condition(check,{}))
+        probability=node('RandomActiveModifier', rate=25, useCharacterPropAsRate=False)
+        self.assertIn('25%', explain_condition(probability,{}))
+        actor=node('CurrentActionUsingSpecifiedKungfu', kungfuType=1, idOrName=[], excludeIdOrName=None)
+        self.assertIn('外功', explain_condition(actor,{}))
+        self.assertIn('尚未翻译', result[1]['conditions'][0])
+
     def test_community_routes_do_not_match_npc_or_other_id_variants(self):
         row = dict(key='千王之王', id=3523)
         notes, refs = acquisition_reference(row)
