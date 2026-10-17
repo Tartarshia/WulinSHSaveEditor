@@ -65,6 +65,10 @@ class BrowserUiTests(unittest.TestCase):
                                  readonly_detail='仅增删记录不能保证脚本正确初始化' if key == 'readonly' else '',
                                  lifetime=1 if permanent else 48, tick="Infinite" if permanent else "Time"))
 
+        for key, owned in [('internal-owned', True), ('internal-missing', False)]:
+            statuses.append(dict(statuses[0], key=key, id=99, name='内部状态'+key, owned=owned,
+                                 readonly='游戏内部隐藏状态，只读', source='其他状态'))
+
         def respond(route):
             nonlocal loaded
             path = urlsplit(route.request.url).path
@@ -95,7 +99,7 @@ class BrowserUiTests(unittest.TestCase):
                     rows = [x for x in statuses if (query.get('source', ['all'])[0] in ('all', x['source'])) and (query.get('kind', ['all'])[0] == 'all' or (query['kind'][0] == 'permanent') == x['permanent'])]
                     sorting = query.get('sort', ['default'])[0]
                     rows.sort(key=lambda x: (not x['owned'], x['id'] if sorting == 'id' else -x['rarity'] if sorting == 'rarity' else x['order'], x['order']))
-                    data = dict(rows=rows, total=4, owned=sum(x['owned'] for x in statuses), sources=list(dict.fromkeys(x['source'] for x in statuses)))
+                    data = dict(rows=rows, total=len(statuses), owned=sum(x['owned'] for x in statuses), sources=list(dict.fromkeys(x['source'] for x in statuses)))
             elif path == "/api/equipment":
                 data = dict(rows=[dict(id=6, name="测试武器", group="武器 · 剑", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True, extra_data=[dict(label="锻造等级（原值）", value="2"), dict(label="测试字段", value="<script>")]), dict(index=1, fingerprint="second", modified=False, extra_data=[])], description="防具说明"), dict(id=8, name="测试宠物装备", group="宠物武器", rarity=1, copies=[], description="宠物武器说明")], total=3)
             elif path == "/api/recipes":
@@ -236,6 +240,16 @@ class BrowserUiTests(unittest.TestCase):
             self.assertEqual(page.locator("#characterDetail h2").first.inner_text(), "测试角色39")
             page.locator('[data-tab="statuses"]').click()
             page.locator('#missingStatusGroups [data-status-toggle="normal"]').wait_for()
+            self.assertTrue(page.locator('[data-status-toggle="readonly"]').is_disabled())
+            self.assertFalse(page.locator('#statusShowInternal').is_checked())
+            self.assertEqual(page.locator('[data-status-toggle^="internal-"]').count(), 0)
+            self.assertIn('已隐藏 2 个内部状态', page.locator('#statusSummary').inner_text())
+            page.locator('#statusShowInternal').check()
+            page.locator('[data-status-toggle="internal-owned"]').wait_for()
+            self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="internal-owned"]').is_checked())
+            self.assertTrue(page.locator('#missingStatusGroups [data-status-toggle="internal-missing"]').is_disabled())
+            page.locator('#statusShowInternal').uncheck()
+            page.locator('[data-status-toggle="internal-owned"]').wait_for(state='detached')
             self.assertTrue(page.locator('[data-status-toggle="readonly"]').is_disabled())
             special = page.locator('.status-card[data-status-key="readonly"]')
             self.assertIn('触发条件：每场战斗首次遭遇致命伤害', special.inner_text())
