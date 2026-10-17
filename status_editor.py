@@ -32,6 +32,9 @@ def readonly_reason(row):
     if row.get("unknown"): return "当前游戏表中未找到定义，仅显示存档记录"
     if row.get("displayType") in {"经脉", "家园"}: return "由经脉或家园系统管理，只读"
     if str(row.get("uName", "")).startswith("剧情"): return "剧情联动状态，只读"
+    key = str(row.get("uName", ""))
+    if key.startswith(("团队体力效果_", "团队心情效果_")): return "由队伍体力或心情自动管理，只读"
+    if key.startswith("主角与") and "情缘buff" in key: return "由情缘关系系统管理，只读"
     for field, reason in (("instantEffect", "有获得时的即时属性或事件效果"),
                           ("endRemoveEffect", "有移除时的属性或事件效果"),
                           ("dynamicModifier", "由动态脚本计算"), ("battleAruas", "包含战斗光环联动"),

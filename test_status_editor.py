@@ -97,6 +97,8 @@ class StatusEditorTests(unittest.TestCase):
             row = dict(self.catalog["普通"], **{field: value})
             self.assertTrue(readonly_reason(row), (field, value))
         self.assertTrue(readonly_reason(dict(self.catalog["普通"], continousEffect=["队伍体力Max@团队|10"])))
+        for key in ("团队体力效果_0", "团队心情效果_0", "主角与测试角色情缘buff"):
+            self.assertTrue(readonly_reason(dict(self.catalog["普通"], uName=key)))
 
     def test_template_and_overrides_are_readonly(self):
         self.hero["buffLib"]["buffsFromTemplete"] = ["普通"]
