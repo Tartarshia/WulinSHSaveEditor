@@ -6,6 +6,8 @@
 
 ## 当前版本：v1.2.0（阶段完成版）
 
+源码及本地版新增“状态”页（尚未发布新的 Release）：仅修改主角的普通状态。已获得置顶，未获得可按游戏表默认顺序、ID 或品质排序；支持永久／临时及来源筛选，依据官方角色创建特征表单列“创建角色可选”。卡片悬停或键盘聚焦显示游戏中文说明，特殊、剧情、经脉、家园、条件联动、动态数值、内部隐藏和未知状态只读并显示原因。普通状态增删会同步调整可解析的属性缓存，临时状态按官方时长录入并由游戏继续计时；不补发创建时的金钱、道具、武功或其他奖励。修改仍需点击“保存状态”；该页与角色属性、生活技能共用角色存档文件。实际游戏内的效果和计时仍须验证。
+
 从 [GitHub Releases](https://github.com/Tartarshia/WulinSHSaveEditor/releases/latest) 下载 Windows x64 压缩包，解压运行 `WulinSHSaveEditor.exe`，无需安装 Python。升级时先退出旧版的所有页面，再运行新版；未保存的内存修改不会迁移。不要在旧服务仍运行时只替换 EXE。
 
 这一阶段包含独立生活技能、装备及宠物装备、其他可堆叠物品页面；完善物品分组、分类折叠、底部状态栏与角色列表滚动。装备支持每次新增独立一件、逐件删除、并列显示及附加数据弹窗。
@@ -64,6 +66,7 @@ python web_app.py
 python test_public.py
 python -m unittest test_browser_lifecycle -v
 python -m unittest test_editor_stats -v
+python -m unittest test_status_editor -v
 ```
 
 可选的浏览器界面回归测试（需要本机 Microsoft Edge，使用模拟数据，不读写真实存档）：

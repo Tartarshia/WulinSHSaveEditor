@@ -29,6 +29,7 @@ from game_data import (
     load_life_ability_catalog, load_recipe_catalog, load_recipe_details, load_team_stamina_modifiers, load_main_prop_growth,
 )
 from paths import discover_game_roots, discover_save_roots, is_game_root, is_save_root, load_preferences, save_preferences
+from status_editor import load_status_catalog, list_statuses, set_status
 
 TEAM_FILE = "SaveObjectPlayerTeam.save"
 CHAR_FILE = "SaveObjectGameCharacter.save"
@@ -61,6 +62,8 @@ class EditorState:
         self.treasure_catalog: dict[int, dict] = {}
         self.other_stackable_catalog: dict[int, dict] = {}
         self.equipment_catalog: dict[int, dict] = {}
+        self.status_catalog: dict[str, dict] = {}
+        self._status_lock = threading.RLock()
         self.character_names: dict[int, str] = {}
         self.character_profiles: dict[int, tuple[str, str]] = {}
         self.affinity_candidates: dict[str, set[int]] = {}
@@ -135,6 +138,7 @@ class EditorState:
             self.treasure_catalog = {}
             self.other_stackable_catalog = {}
             self.equipment_catalog = {}
+            self.status_catalog = {}
             self.main_prop_growth = {}
             self.recipe_details = {}
             self.book_catalog = {}
@@ -688,11 +692,23 @@ class EditorState:
             for faction in state.get("factionDict", {}).values():
                 if str(faction.get("templeteId")) == entity_id: faction["playerFame"] = value
 
+    def statuses(self, query="", kind="all", source="all", sort="default") -> dict:
+        self.require_loaded()
+        with self._status_lock:
+            if not self.status_catalog: self.status_catalog = load_status_catalog(self.game_root)
+            return list_statuses(self.hero, self.status_catalog, query, kind, source, sort)
+
+    def change_status(self, key: str, owned: bool) -> None:
+        self.require_loaded()
+        with self._status_lock:
+            if not self.status_catalog: self.status_catalog = load_status_catalog(self.game_root)
+            set_status(self.hero, self.status_catalog, key, owned, self.time_data["Data"]["value"].get("TotalQuaterPassed", 0))
+
     def save(self, target: str) -> str:
         self.require_loaded(); folder = self.save_root / self.slot; backup = self.save_root / "_EditorBackups" / f"{self.slot}_{datetime.now():%Y%m%d_%H%M%S}"
         backup.parent.mkdir(exist_ok=True); shutil.copytree(folder, backup)
         if target == "items": es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
-        elif target in {"characters", "relations", "life"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
+        elif target in {"characters", "relations", "life", "statuses"}: es3_codec.atomic_write(folder / CHAR_FILE, self.char_data)
         elif target in {"books", "recipes", "consumables", "materials", "treasures", "other_stackable", "equipment"}: es3_codec.atomic_write(folder / TEAM_FILE, self.team_data)
         elif target == "factions": es3_codec.atomic_write(folder / FACTION_FILE, self.faction_data)
         elif target == "global":
@@ -783,6 +799,10 @@ def make_app(port: int, sessions: BrowserSessions | None = None) -> Flask:
     def api_characters(): return respond(lambda: {"characters": state.characters()})
     @app.get("/api/life-abilities")
     def api_life_abilities(): return respond(state.life_abilities)
+    @app.get("/api/statuses")
+    def api_statuses(): return respond(lambda: state.statuses(request.args.get("q", ""), request.args.get("kind", "all"), request.args.get("source", "all"), request.args.get("sort", "default")))
+    @app.post("/api/statuses")
+    def api_change_status(): return respond(lambda: (state.change_status(body()["key"], body()["owned"]), {"message": "主角状态已在内存中修改；点击保存状态后才写入。"})[1])
     @app.post("/api/life-abilities")
     def api_set_life_ability(): return respond(lambda: (state.set_character("100401", {**body(), "kind": "life"}), {"message": "主角生活技能已在内存中修改，点击保存生活技能后才写入存档。"})[1])
     @app.post("/api/life-abilities/max")

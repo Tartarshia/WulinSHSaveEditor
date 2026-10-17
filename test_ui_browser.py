@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 import unittest
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 from urllib.request import urlopen
 
 
@@ -55,6 +55,13 @@ class BrowserUiTests(unittest.TestCase):
         long_path = "C:\\" + "SyntheticBackupFolder\\" * 24
         consumables = [dict(id=1, name="测试丹药", group="丹药", rarity=3, count=2, description="直接显示的说明"),
                        dict(id=2, name="测试水果", group="水果", rarity=1, count=0, description="测试说明")]
+        statuses = []
+        for key, uid, rarity, owned, source, permanent in (("active", 2, 1, True, "特征", True), ("normal", 9, 3, False, "创建角色可选", True), ("readonly", 1, 2, False, "经脉", True), ("temporary", 3, 0, False, "其他状态", False)):
+            statuses.append(dict(key=key, id=uid, name="测试状态" + key, description="悬停状态说明 <script>" + key,
+                                 rarity=rarity, order=len(statuses), owned=owned, active=owned, source=source,
+                                 permanent=permanent, creation=["创建天赋"] if key == "normal" else [],
+                                 readonly="特殊状态只读" if key == "readonly" else "", remaining=[1] if owned else [],
+                                 lifetime=1 if permanent else 48, tick="Infinite" if permanent else "Time"))
 
         def respond(route):
             nonlocal loaded
@@ -73,6 +80,20 @@ class BrowserUiTests(unittest.TestCase):
                 data = dict(consumables=consumables, total=2)
             elif path == "/api/books":
                 data = dict(books=[dict(id=3, name="测试秘籍", group="内功", rarity=2, owned=False, description="测试说明")], total=1)
+            elif path == "/api/statuses":
+                if route.request.method == 'POST':
+                    payload = json.loads(route.request.post_data)
+                    row = next(x for x in statuses if x['key'] == payload['key'])
+                    assert not row['readonly']
+                    row['owned'] = row['active'] = payload['owned']
+                    row['remaining'] = [1] if row['owned'] else []
+                    data = dict(message="状态已在内存中修改")
+                else:
+                    query = parse_qs(urlsplit(route.request.url).query)
+                    rows = [x for x in statuses if (query.get('source', ['all'])[0] in ('all', x['source'])) and (query.get('kind', ['all'])[0] == 'all' or (query['kind'][0] == 'permanent') == x['permanent'])]
+                    sorting = query.get('sort', ['default'])[0]
+                    rows.sort(key=lambda x: (not x['owned'], x['id'] if sorting == 'id' else -x['rarity'] if sorting == 'rarity' else x['order'], x['order']))
+                    data = dict(rows=rows, total=4, owned=sum(x['owned'] for x in statuses), sources=list(dict.fromkeys(x['source'] for x in statuses)))
             elif path == "/api/equipment":
                 data = dict(rows=[dict(id=6, name="测试武器", group="武器 · 剑", rarity=3, copies=[], description="装备说明"), dict(id=7, name="测试防具", group="防具", rarity=2, copies=[dict(index=0, fingerprint="test", modified=True, extra_data=[dict(label="锻造等级（原值）", value="2"), dict(label="测试字段", value="<script>")]), dict(index=1, fingerprint="second", modified=False, extra_data=[])], description="防具说明"), dict(id=8, name="测试宠物装备", group="宠物武器", rarity=1, copies=[], description="宠物武器说明")], total=3)
             elif path == "/api/recipes":
@@ -211,9 +232,37 @@ class BrowserUiTests(unittest.TestCase):
             characters.locator("button").last.click()
             page.locator("#characterDetail h2").first.wait_for()
             self.assertEqual(page.locator("#characterDetail h2").first.inner_text(), "测试角色39")
+            page.locator('[data-tab="statuses"]').click()
+            page.locator('#missingStatusGroups [data-status-toggle="normal"]').wait_for()
+            self.assertTrue(page.locator('[data-status-toggle="readonly"]').is_disabled())
+            self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="active"]').is_checked())
+            card = page.locator('.status-card[data-status-key="normal"]')
+            self.assertNotIn('悬停状态说明', card.inner_text())
+            card.hover()
+            page.locator('#statusTooltip').wait_for(state='visible')
+            self.assertIn('悬停状态说明 <script>normal', page.locator('#statusTooltip').inner_text())
+            self.assertEqual(page.locator('#statusTooltip script').count(), 0)
+            page.keyboard.press('Escape')
+            self.assertTrue(page.locator('#statusTooltip').is_hidden())
+            page.locator('[data-status-toggle="normal"]').check()
+            page.locator('#ownedStatusGroups [data-status-toggle="normal"]').wait_for()
+            page.locator('[data-status-toggle="normal"]').uncheck()
+            page.locator('#missingStatusGroups [data-status-toggle="normal"]').wait_for()
+            page.locator('#statusGrouping').uncheck()
+            page.locator('#statusSort').select_option('id')
+            page.wait_for_function("() => [...document.querySelectorAll('#missingStatusGroups .status-card')].map(x=>x.dataset.statusKey).join(',') === 'readonly,temporary,normal'")
+            page.locator('#statusSort').select_option('rarity')
+            page.wait_for_function("() => [...document.querySelectorAll('#missingStatusGroups .status-card')].map(x=>x.dataset.statusKey).join(',') === 'normal,readonly,temporary'")
+            page.locator('#statusSource').select_option('创建角色可选')
+            page.wait_for_function("() => document.querySelectorAll('#statuses .status-card').length === 1")
+            page.locator('#statusSource').select_option('all')
+            page.locator('#statusKind').select_option('temporary')
+            page.wait_for_function("() => document.querySelectorAll('#statuses .status-card').length === 1 && document.querySelector('#statuses .status-card').dataset.statusKey === 'temporary'")
+            page.locator('#statusKind').select_option('all')
+            page.locator('#statusGrouping').check()
             for width in [1400, 900, 540, 375, 320]:
                 page.set_viewport_size({"width": width, "height": 900})
-                for tab in ["life", "global", "items", "characters", "consumables", "books", "recipes", "materials", "treasures", "other_stackable", "equipment", "relations", "factions"]:
+                for tab in ["life", "global", "items", "characters", "statuses", "consumables", "books", "recipes", "materials", "treasures", "other_stackable", "equipment", "relations", "factions"]:
                     page.locator(f'[data-tab="{tab}"]').click()
                     page.wait_for_timeout(40)
                     self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), (width, tab))
