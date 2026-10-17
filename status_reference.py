@@ -4,6 +4,7 @@ Checked 2026-10-17. Match BOTH internal key and ID: NPC traits and sect variants
 with the same localized name must not inherit the player's acquisition route.
 No wiki text is downloaded by the application at runtime.
 """
+import re
 
 WIKI_TRAITS = "https://heros-adventure.wikidot.com/traits"
 WIKI_ACHIEVEMENTS = "https://heros-adventure.wikidot.com/chengjiu"
@@ -57,7 +58,7 @@ LOCAL_TRIGGER_HINTS = {
     ("转世佛子", 3524): ("仁德低于0", "加成依据：仁德的正负值；初始仁德只在创建时设置。"),
     ("知行合一", 3526): ("品格全部满足100", "生效分支：仁、义、礼、智、信全部达到 100 为正面效果，否则为负面效果。"),
     ("替天行道", 3527): ("首领角色", "战斗触发：入场结算群体效果，攻击首领时结算额外伤害。"),
-    ("博采众长", 3529): ("第十重", "加成依据：修炼至第十重的内外功，按品质累计。"),
+    ("博采众长", 3529): ("第十重", "生效条件：内功或外功练到第十重后，按武功品质累计加成；外功增加基础攻击，内功增加基础防御。"),
     ("追命阎罗", 3530): ("连击触发暴击", "战斗触发：攻击暴击，以及连击中的暴击。"),
     ("道法自然", 3531): ("使用外功攻击", "战斗触发：使用外功攻击；集气增益常驻。"),
     ("气血充盈", 3532): ("体质影响", "加成依据：体质带来的生命值效果，没有额外事件触发。"),
@@ -69,11 +70,56 @@ LOCAL_TRIGGER_HINTS = {
 
 def local_trigger_reference(row):
     try:
-        hint = LOCAL_TRIGGER_HINTS.get((row.get("uName", row.get("key")), int(row.get("id", row.get("uid", 0)))))
+        key = row.get("uName", row.get("key"))
+        uid = int(row.get("id", row.get("uid", 0)))
+        hint = LOCAL_TRIGGER_HINTS.get((key, uid))
+        # Only the known +10000 story variant can reuse a condition summary,
+        # and its own game description must still pass the text guard below.
+        # Never inherit creation rewards, wiki acquisition routes or editability.
+        if not hint and isinstance(key, str) and key.startswith('剧情'):
+            hint = LOCAL_TRIGGER_HINTS.get((key[2:], uid - 10000))
     except (ValueError, TypeError):
         return []
     if not hint or hint[0] not in row.get("description", ""): return []
     return [hint[1]]
+
+
+def readable_runtime_summary(branches):
+    """Small, strict human-language whitelist. Never expose raw graphs as prose."""
+    if any(not branch.get('complete') for branch in branches): return []
+    useful = [branch for branch in branches if branch.get('path') and
+              branch.get('conditions') != ['此脚本分支没有额外条件项（不代表状态可自动获得）']]
+    if len(useful) != 1 or not useful[0].get('complete'): return []
+    branch = useful[0]
+    notes = []
+    for text in branch['conditions']:
+        ratio = re.fullmatch(r'(-?[\d.]+)% ≤ 持有者生命比例 ≤ ([\d.]+)%', text)
+        if ratio:
+            low, high = map(float, ratio.groups())
+            if low > 0: return []
+            notes.append('自身气血耗尽时' if high == 0 else f'自身气血不高于 {high:g}%')
+        elif text == '1 ≤ 队伍·持有者是队友*战场·敌人数量 ≤ 9999':
+            notes.append('自身为队伍伙伴，且场上仍有敌人')
+        elif text == '队伍·持有者是队友 = 1': notes.append('自身为队伍伙伴')
+        elif text == '当前动作类别：外功': notes.append('使用外功时')
+        elif text == '当前动作类别：任意；限 暗器': notes.append('使用暗器时')
+        elif text == '当前动作类别：任意；限 治疗': notes.append('施展治疗时')
+        elif text == '当前行动者为状态持有者': notes.append('轮到自身行动时')
+        elif text == '持有者·战斗临时记录·外功出手次数 = 1': notes.append('本场战斗第一次使用外功')
+        elif text == '持有者·战斗临时记录·出手次数 = 1': notes.append('本场战斗首次出手')
+        elif text == '持有者·战斗临时记录·出手前移动距离 = 0': notes.append('本次行动尚未移动')
+        elif re.fullmatch(r'随机触发概率 [\d.]+%', text):
+            notes.append('有 ' + text.removeprefix('随机触发概率 ') + ' 的概率触发')
+        elif text.startswith('本次伤害判定：'):
+            event = text.removeprefix('本次伤害判定：')
+            mapping = {'发生暴击':'攻击触发暴击','未发生暴击':'攻击未触发暴击',
+                       '发生格挡':'攻击被格挡','发生闪避':'攻击被闪避',
+                       '发生击杀':'击败敌人','发生连击':'攻击触发连击','发生反击':'触发反击'}
+            if event not in mapping or any('受击方' in stage for stage in branch['timing']): return []
+            notes.append(mapping[event])
+        else: return []
+    if not notes: return []
+    return ['触发参考：' + '，并且'.join(dict.fromkeys(notes)) + '。']
 
 
 def acquisition_reference(row):

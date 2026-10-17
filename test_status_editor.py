@@ -10,11 +10,28 @@ import struct
 from decimal import Decimal
 
 from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
-from status_reference import acquisition_reference, local_trigger_reference
+from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary
 from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_human_conditions_story_variants_and_no_diagnostic_filler(self):
+        row=dict(key='剧情博采众长', uName='剧情博采众长', id=13529, description='外功到第十重，内功到第十重。', dynamicModifier=['script'])
+        notes=status_conditions(row)
+        self.assertIn('基础攻击', notes[0])
+        self.assertIn('基础防御', notes[0])
+        self.assertNotIn('分支', ' '.join(notes))
+        self.assertEqual(acquisition_reference(row), ([], []))
+        self.assertIn('只读', readonly_reason(row))
+        self.assertEqual(local_trigger_reference(dict(row,id=13530)), [])
+        self.assertEqual(local_trigger_reference(dict(row,description='新版未知效果')), [])
+        branch=dict(path='Assets/x', timing=['武功变化时'], conditions=['此脚本分支没有额外条件项（不代表状态可自动获得）'],complete=True)
+        self.assertEqual(status_conditions(dict(dynamicModifier=['script'],runtime_conditions=[branch])), ['激活条件：暂未解析。'])
+        valid=dict(branch, conditions=['-99900% ≤ 持有者生命比例 ≤ 30.0%','1 ≤ 队伍·持有者是队友*战场·敌人数量 ≤ 9999'])
+        self.assertIn('自身气血不高于 30%', readable_runtime_summary([valid])[0])
+        self.assertIn('队伍伙伴', readable_runtime_summary([valid])[0])
+        self.assertEqual(readable_runtime_summary([dict(valid,conditions=['任意复杂公式'])]), [])
+
     def test_bounded_odin_reader_decimals_strings_and_fail_closed(self):
         def string(value, wide=True):
             return bytes([int(wide)]) + struct.pack('<i', len(value)) + value.encode('utf-16-le' if wide else 'latin-1')

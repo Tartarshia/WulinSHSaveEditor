@@ -7,8 +7,8 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
-from status_reference import acquisition_reference, local_trigger_reference
-from modifier_conditions import read_runtime_modifiers, explain_modifiers, compact_condition
+from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary
+from modifier_conditions import read_runtime_modifiers, explain_modifiers
 
 
 def tokens(value):
@@ -84,14 +84,8 @@ def status_conditions(row):
     notes.extend(row.get("unlock_conditions", []))
     notes.extend(row.get("reference_notes", []))
     notes.extend(row.get("origin_notes", []))
-    branches = row.get("runtime_conditions", [])
-    available = [branch for branch in branches if branch.get("path")]
-    if scripts and not notes and available:
-        for index, branch in enumerate(available[:2], 1):
-            timing = '／'.join(branch['timing']) or '未知回调'
-            notes.append(f"条件摘要·配置推导·分支 {index}（{timing}）：" + '；且'.join(compact_condition(text) for text in branch['conditions']))
-        if len(available) > 2: notes.append(f"另有 {len(available)-2} 个独立脚本分支，详见悬停说明。")
-        if any(not branch['complete'] for branch in branches): notes.append("仍有未翻译的脚本条件，详见悬停说明。")
+    if scripts and not notes:
+        notes.extend(readable_runtime_summary(row.get('runtime_conditions', [])))
     if scripts and not notes:
         notes.append("激活条件：暂未解析。")
     return notes
