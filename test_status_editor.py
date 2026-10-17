@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -15,9 +16,26 @@ class StatusEditorTests(unittest.TestCase):
         self.assertIn('首次遭遇致命伤害', status_conditions(row)[0])
         self.assertIn('每场战斗', status_conditions(row)[0])
         self.assertIn('只读', readonly_reason(row))
-        self.assertIn('未提供', status_conditions(dict(dynamicModifier=['Unknown/Script']))[0])
+        self.assertEqual(status_conditions(dict(dynamicModifier=['Unknown/Script'])), ['激活条件：暂未解析。'])
         self.assertEqual(status_conditions({}), [])
-        self.assertIn('免疫', status_conditions(dict(tagsNotActive=['免疫']))[0])
+        self.assertEqual(status_conditions(dict(tagsNotActive=['免疫'])), [])
+
+    def test_property_thresholds_and_readonly_guard(self):
+        for raw, expected in [('福缘|10|9999', '福缘 ≥ 10'), ('仁德|-9999|-100', '仁德 ≤ -100'),
+                              ('体质|25|9999', '体质 ≥ 25'), ('口才|1|999', '1 ≤ 口才 ≤ 999'),
+                              ('悟性|10|10', '悟性 = 10')]:
+            self.assertIn(expected, status_conditions(dict(property_requirements=[[raw]]))[0])
+        self.assertIn('未解析', status_conditions(dict(property_requirements=[['福缘|NaN|9999']]))[0])
+        row = self.catalog['普通']
+        row['property_requirements'] = [['福缘|10|9999']]
+        row['readonly'] = readonly_reason(row)
+        self.assertIn('属性达标', row['readonly'])
+        before = copy.deepcopy(self.hero)
+        with self.assertRaises(ValueError): set_status(self.hero, self.catalog, '普通', True, 100)
+        self.assertEqual(before, self.hero)
+        result = next(x for x in list_statuses(self.hero, self.catalog)['rows'] if x['key']=='普通')
+        self.assertIn('福缘 ≥ 10', result['conditions'][0])
+        self.assertIn('SelfPropBufflData', result['condition_source'])
 
     def test_catalog_merges_multiple_official_workbooks_and_creation_links(self):
         class Sheet:
@@ -32,13 +50,15 @@ class StatusEditorTests(unittest.TestCase):
                  Book(BuffData=Sheet(header, [(None, 2, '第二状态', True, 2, 'Time', 48, '防御|3')])),
                  Book(TraitData=Sheet((None, 'uid', 'uName', 'isUseByPlayer', 'bonusBuff'), [(None, 3, '创建天赋', 'True', '第一状态')]))]
         with patch('status_editor.ZipFile') as archive, patch('status_editor.load_workbook', side_effect=books), patch('UnityPy.load', return_value=SimpleNamespace(objects=[])):
-            archive.return_value.__enter__.return_value.infolist.return_value = [SimpleNamespace(filename=f'Game/xls/1/{i}.xlsx') for i in range(3)]
-            archive.return_value.__enter__.return_value.read.return_value = b'workbook'
+            archive.return_value.__enter__.return_value.infolist.return_value = [SimpleNamespace(filename=f'Game/xls/1/{i}.xlsx') for i in range(3)] + [SimpleNamespace(filename='Game/json/1/SelfPropBufflData.txt')]
+            archive.return_value.__enter__.return_value.read.side_effect = lambda info: json.dumps({'SelfPropBufflData':[dict(getBuff='第二状态', propRequire=['福缘|10|9999'])]}).encode() if info.filename.endswith('.txt') else b'workbook'
             catalog = load_status_catalog(Path('synthetic-game'))
         self.assertEqual(set(catalog), {'第一状态', '第二状态'})
         self.assertEqual(catalog['第一状态']['source'], '创建角色可选')
         self.assertEqual(catalog['第一状态']['creation'], ['创建天赋'])
         self.assertEqual(catalog['第二状态']['order'], 1)
+        self.assertEqual(catalog['第二状态']['property_requirements'], [['福缘|10|9999']])
+        self.assertIn('属性达标', catalog['第二状态']['readonly'])
 
     def setUp(self):
         self.catalog = {}

@@ -2,6 +2,7 @@
 from copy import deepcopy
 from io import BytesIO
 import math
+import json
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -30,6 +31,7 @@ def numeric_effects(row):
 
 def readonly_reason(row):
     if row.get("unknown"): return "当前游戏表中未找到定义，仅显示存档记录"
+    if row.get("property_requirements"): return "由属性达标自动获得或移除，只读"
     if row.get("displayType") in {"经脉", "家园"}: return "由经脉或家园系统管理，只读"
     if str(row.get("uName", "")).startswith("剧情"): return "剧情联动状态，只读"
     key = str(row.get("uName", ""))
@@ -53,17 +55,30 @@ def readonly_reason(row):
 def status_conditions(row):
     """Only state conditions supported by the exported fields or game wording."""
     notes = []
+    for requirements in row.get("property_requirements", []):
+        parts = []
+        for requirement in requirements:
+            fields = str(requirement).split("|")
+            try:
+                name, low, high = fields
+                low, high = float(low), float(high)
+                if not name or not math.isfinite(low) or not math.isfinite(high) or low > high: raise ValueError()
+                name = name.rsplit("_", 1)[-1]
+                if high == 9999: text = f"{name} ≥ {low:g}"
+                elif low == -9999: text = f"{name} ≤ {high:g}"
+                elif low == high: text = f"{name} = {low:g}"
+                else: text = f"{low:g} ≤ {name} ≤ {high:g}"
+                parts.append(text)
+            except (ValueError, TypeError):
+                parts.append("未解析的属性条件：" + str(requirement))
+        if parts: notes.append("属性激活条件：" + "，且".join(parts) + "。")
     scripts = tokens(row.get("dynamicModifier"))
     if "Traits/SiLiTaoSheng" in scripts:
         notes.append("触发条件：每场战斗中首次遭遇致命伤害；效果：保留 1 点血量。")
     elif "NpcTraits/SiLiTaoSheng" in scripts:
         notes.append("触发条件：受到致命一击；效果：保留 1 点血量，每场战斗生效 1 次。")
-    if row.get("tagsForActive"):
-        notes.append("生效所需标签（游戏原值）：" + "、".join(tokens(row["tagsForActive"])))
-    if row.get("tagsNotActive"):
-        notes.append("阻止生效的标签（游戏原值）：" + "、".join(tokens(row["tagsNotActive"])))
     if scripts and not notes:
-        notes.append("触发条件：由游戏脚本判定，请参照悬停说明；导出表未提供可独立解析的条件。")
+        notes.append("激活条件：暂未解析。")
     return notes
 
 
@@ -73,6 +88,8 @@ def load_status_catalog(game_root: Path):
     tables = {}
     with ZipFile(game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip") as archive:
         for info in archive.infolist():
+            if info.filename.replace("\\", "/").endswith("/json/1/SelfPropBufflData.txt"):
+                tables["SelfPropBufflData"] = json.loads(archive.read(info).decode("utf-8-sig"))["SelfPropBufflData"]
             if not info.filename.endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"): continue
             workbook = load_workbook(BytesIO(archive.read(info)), read_only=True, data_only=True)
             for name in ("BuffData", "TraitData"):
@@ -96,6 +113,10 @@ def load_status_catalog(game_root: Path):
         if flag(row.get("isUseByPlayer")):
             for key in tokens(row.get("bonusBuff")):
                 creation.setdefault(key, []).append(str(row["uName"]))
+    property_rules = {}
+    for rule in tables.get("SelfPropBufflData", []):
+        for key in tokens(rule.get("getBuff")):
+            property_rules.setdefault(key, []).append(tokens(rule.get("propRequire")))
     result = {}
     for index, row in enumerate(tables["BuffData"]):
         key = str(row["uName"])
@@ -108,6 +129,7 @@ def load_status_catalog(game_root: Path):
         try: uid, rarity = int(row.get("uid", 0)), int(row.get("rarity", -1))
         except (ValueError, TypeError): uid, rarity = 0, -1
         row.update(id=uid, key=key, rarity=rarity, order=index,
+                   property_requirements=property_rules.get(key, []),
                    name=plain_game_text(names.get(loc, key)),
                    description=plain_game_text(descriptions.get(loc, "游戏资源中暂无文字说明。")),
                    creation=creation.get(key, []),
@@ -156,8 +178,11 @@ def list_statuses(hero, catalog, query="", kind="all", source="all", sort="defau
                          records=len(instances), remaining=[x.get("lifeTime") for x in instances],
                          lifetime=detail.get("lifeTime"), tick=detail.get("tickType", ""),
                          conditions=status_conditions(detail),
-                         readonly_detail=("此效果依赖游戏脚本响应战斗事件或计算属性；仅增删存档中的状态记录不能保证正确初始化或清理，因此暂不允许修改。"
-                                          if detail.get("dynamicModifier") else ""),
+                         condition_source="官方属性条件表 SelfPropBufflData" if detail.get("property_requirements") else "",
+                         technical_conditions=["原始属性范围：" + "；或".join("，且".join(rule) for rule in detail["property_requirements"])] if detail.get("property_requirements") else [],
+                         tag_conditions=(["额外限制：需要标签 " + "、".join(tokens(detail["tagsForActive"]))] if detail.get("tagsForActive") else [])
+                                        + (["额外限制：存在以下标签时不生效：" + "、".join(tokens(detail["tagsNotActive"]))] if detail.get("tagsNotActive") else []),
+                         readonly_detail="请修改对应属性，由游戏按门槛自动管理此状态；手动增删状态不能代替属性达标。" if detail.get("property_requirements") else "",
                          readonly=instance_reason(detail, library, instances)))
     sources = list(dict.fromkeys(["创建角色可选", *[x["source"] for x in rows]]))
     total, owned = len(rows), sum(x["owned"] for x in rows)
