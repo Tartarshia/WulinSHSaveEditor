@@ -238,6 +238,8 @@ class BrowserUiTests(unittest.TestCase):
             self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="active"]').is_checked())
             card = page.locator('.status-card[data-status-key="normal"]')
             self.assertNotIn('悬停状态说明', card.inner_text())
+            self.assertNotIn('悬停或聚焦查看说明', card.inner_text())
+            self.assertEqual(page.locator('.status-hover-hint').count(), 0)
             card.hover()
             page.locator('#statusTooltip').wait_for(state='visible')
             self.assertIn('悬停状态说明 <script>normal', page.locator('#statusTooltip').inner_text())
