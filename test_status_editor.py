@@ -8,9 +8,22 @@ import threading
 import re
 
 from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
+from status_reference import acquisition_reference, local_trigger_reference
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_community_routes_do_not_match_npc_or_other_id_variants(self):
+        row = dict(key='千王之王', id=3523)
+        notes, refs = acquisition_reference(row)
+        self.assertIn('20', notes[0])
+        self.assertTrue(refs[0]['url'].startswith('https://heros-adventure.wikidot.com/'))
+        self.assertEqual(acquisition_reference(dict(row, id=9999)), ([], []))
+        self.assertEqual(acquisition_reference(dict(row, key='伙伴特征千王之王')), ([], []))
+        self.assertEqual(acquisition_reference(dict(row, id='bad')), ([], []))
+        trigger = dict(key='影子护卫', id=3506, description='生命值低于25%')
+        self.assertIn('25%', local_trigger_reference(trigger)[0])
+        self.assertEqual(local_trigger_reference(dict(trigger, description='新版不同条件')), [])
+
     def test_script_conditions_are_separate_from_editing_restriction(self):
         row = dict(dynamicModifier=['Traits/SiLiTaoSheng'])
         self.assertIn('首次遭遇致命伤害', status_conditions(row)[0])
@@ -50,8 +63,12 @@ class StatusEditorTests(unittest.TestCase):
                  Book(BuffData=Sheet(header, [(None, 2, '第二状态', True, 2, 'Time', 48, '防御|3')])),
                  Book(TraitData=Sheet((None, 'uid', 'uName', 'isUseByPlayer', 'bonusBuff'), [(None, 3, '创建天赋', 'True', '第一状态')]))]
         with patch('status_editor.ZipFile') as archive, patch('status_editor.load_workbook', side_effect=books), patch('UnityPy.load', return_value=SimpleNamespace(objects=[])):
-            archive.return_value.__enter__.return_value.infolist.return_value = [SimpleNamespace(filename=f'Game/xls/1/{i}.xlsx') for i in range(3)] + [SimpleNamespace(filename='Game/json/1/SelfPropBufflData.txt')]
-            archive.return_value.__enter__.return_value.read.side_effect = lambda info: json.dumps({'SelfPropBufflData':[dict(getBuff='第二状态', propRequire=['福缘|10|9999'])]}).encode() if info.filename.endswith('.txt') else b'workbook'
+            archive.return_value.__enter__.return_value.infolist.return_value = [SimpleNamespace(filename=f'Game/xls/1/{i}.xlsx') for i in range(3)] + [SimpleNamespace(filename='Game/json/1/SelfPropBufflData.txt'), SimpleNamespace(filename='Game/json/1/AchievementData.txt')]
+            def read(info):
+                if 'SelfPropBufflData' in info.filename: return json.dumps({'SelfPropBufflData':[dict(getBuff='第二状态', propRequire=['福缘|10|9999'])]}).encode()
+                if 'AchievementData' in info.filename: return json.dumps({'AchievementData':[dict(uid=5, traitID=3, emType='PropertyValue', TargetParams=['0','福缘','15'])]}).encode()
+                return b'workbook'
+            archive.return_value.__enter__.return_value.read.side_effect = read
             catalog = load_status_catalog(Path('synthetic-game'))
         self.assertEqual(set(catalog), {'第一状态', '第二状态'})
         self.assertEqual(catalog['第一状态']['source'], '创建角色可选')
@@ -59,6 +76,9 @@ class StatusEditorTests(unittest.TestCase):
         self.assertEqual(catalog['第二状态']['order'], 1)
         self.assertEqual(catalog['第二状态']['property_requirements'], [['福缘|10|9999']])
         self.assertIn('属性达标', catalog['第二状态']['readonly'])
+        self.assertIn('福缘 ≥ 15', catalog['第一状态']['unlock_conditions'][0])
+        self.assertIn('开局天赋解锁', catalog['第一状态']['unlock_conditions'][0])
+        self.assertFalse(catalog['第一状态']['readonly'])
 
     def setUp(self):
         self.catalog = {}

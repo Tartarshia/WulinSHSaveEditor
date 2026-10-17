@@ -7,6 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from status_reference import acquisition_reference, local_trigger_reference
 
 
 def tokens(value):
@@ -77,6 +78,9 @@ def status_conditions(row):
         notes.append("触发条件：每场战斗中首次遭遇致命伤害；效果：保留 1 点血量。")
     elif "NpcTraits/SiLiTaoSheng" in scripts:
         notes.append("触发条件：受到致命一击；效果：保留 1 点血量，每场战斗生效 1 次。")
+    notes.extend(local_trigger_reference(row))
+    notes.extend(row.get("unlock_conditions", []))
+    notes.extend(row.get("reference_notes", []))
     if scripts and not notes:
         notes.append("激活条件：暂未解析。")
     return notes
@@ -88,6 +92,8 @@ def load_status_catalog(game_root: Path):
     tables = {}
     with ZipFile(game_root / "Wulin_Data/StreamingAssets/ModEditor/ModEditor.zip") as archive:
         for info in archive.infolist():
+            if info.filename.replace("\\", "/").endswith("/json/1/AchievementData.txt"):
+                tables["AchievementData"] = json.loads(archive.read(info).decode("utf-8-sig"))["AchievementData"]
             if info.filename.replace("\\", "/").endswith("/json/1/SelfPropBufflData.txt"):
                 tables["SelfPropBufflData"] = json.loads(archive.read(info).decode("utf-8-sig"))["SelfPropBufflData"]
             if not info.filename.endswith(".xlsx") or "/xls/1/" not in info.filename.replace("\\", "/"): continue
@@ -117,6 +123,23 @@ def load_status_catalog(game_root: Path):
     for rule in tables.get("SelfPropBufflData", []):
         for key in tokens(rule.get("getBuff")):
             property_rules.setdefault(key, []).append(tokens(rule.get("propRequire")))
+    trait_buffs = {str(row.get("uid")): tokens(row.get("bonusBuff")) for row in tables["TraitData"] if flag(row.get("isUseByPlayer"))}
+    unlock_rules = {}
+    for rule in tables.get("AchievementData", []):
+        args = tokens(rule.get("TargetParams"))
+        text = ""
+        try:
+            if rule.get("emType") == "PropertyValue" and len(args) == 3 and str(args[0]) == "0":
+                value = float(args[2])
+                if math.isfinite(value) and value >= 0: text = f"主角{args[1]} ≥ {value:g}"
+            elif rule.get("emType") == "Money" and len(args) == 2 and str(args[0]) == "0":
+                value = float(args[1])
+                if math.isfinite(value) and value >= 0: text = f"持有铜钱 ≥ {value:g} 文"
+        except (ValueError, TypeError):
+            continue
+        if text:
+            for key in trait_buffs.get(str(rule.get("traitID")), []):
+                unlock_rules.setdefault(key, []).append(f"开局天赋解锁：{text}（成就 {rule.get('uid')}；解锁后可在新建角色时选择）。")
     result = {}
     for index, row in enumerate(tables["BuffData"]):
         key = str(row["uName"])
@@ -130,11 +153,13 @@ def load_status_catalog(game_root: Path):
         except (ValueError, TypeError): uid, rarity = 0, -1
         row.update(id=uid, key=key, rarity=rarity, order=index,
                    property_requirements=property_rules.get(key, []),
+                   unlock_conditions=unlock_rules.get(key, []),
                    name=plain_game_text(names.get(loc, key)),
                    description=plain_game_text(descriptions.get(loc, "游戏资源中暂无文字说明。")),
                    creation=creation.get(key, []),
                    source="创建角色可选" if key in creation else str(row.get("displayType") or "其他状态"),
                    permanent=str(row.get("tickType", "")).casefold() == "infinite")
+        row["reference_notes"], row["condition_references"] = acquisition_reference(row)
         row["readonly"] = readonly_reason(row)
         if not row["isVisible"] and not row["creation"]:
             row["readonly"] = "游戏内部隐藏状态，只读"
@@ -178,6 +203,10 @@ def list_statuses(hero, catalog, query="", kind="all", source="all", sort="defau
                          records=len(instances), remaining=[x.get("lifeTime") for x in instances],
                          lifetime=detail.get("lifeTime"), tick=detail.get("tickType", ""),
                          conditions=status_conditions(detail),
+                         condition_references=detail.get("condition_references", []),
+                         reference_warning="社区资料仅说明获得路线，不代表所有脚本判定已经核验；门派、剧情及版本差异仍以游戏为准。" if detail.get("reference_notes") else "",
+                         unlock_source="开局解锁来源：本机官方 AchievementData → TraitData → bonusBuff；不等于当前存档自动获得状态。" if detail.get("unlock_conditions") else "",
+                         trigger_source="触发摘要来源：本机游戏状态说明（摘要不代表已验证全部脚本判定）。" if local_trigger_reference(detail) else "",
                          condition_source="官方属性条件表 SelfPropBufflData" if detail.get("property_requirements") else "",
                          technical_conditions=["原始属性范围：" + "；或".join("，且".join(rule) for rule in detail["property_requirements"])] if detail.get("property_requirements") else [],
                          tag_conditions=(["额外限制：需要标签 " + "、".join(tokens(detail["tagsForActive"]))] if detail.get("tagsForActive") else [])

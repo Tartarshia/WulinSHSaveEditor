@@ -64,6 +64,7 @@ class BrowserUiTests(unittest.TestCase):
                                  conditions=['属性激活条件：福缘 ≥ 10。'] if key == 'readonly' else [],
                                  condition_source='官方属性条件表 SelfPropBufflData' if key == 'readonly' else '',
                                  tag_conditions=['额外限制：存在以下标签时不生效：测试标签'] if key == 'readonly' else [],
+                                 condition_references=[dict(title='Wiki 参考', url='https://heros-adventure.wikidot.com/traits', checked='2026-10-17')],
                                  readonly_detail='仅增删记录不能保证脚本正确初始化' if key == 'readonly' else '',
                                  lifetime=1 if permanent else 48, tick="Infinite" if permanent else "Time"))
 
@@ -269,6 +270,7 @@ class BrowserUiTests(unittest.TestCase):
             self.assertIn('不能保证脚本正确初始化', page.locator('#statusTooltip').inner_text())
             self.assertIn('SelfPropBufflData', page.locator('#statusTooltip').inner_text())
             self.assertIn('测试标签', page.locator('#statusTooltip').inner_text())
+            self.assertEqual(page.locator('#statusTooltip a').get_attribute('href'), 'https://heros-adventure.wikidot.com/traits')
             self.assertTrue(page.locator('#ownedStatusGroups [data-status-toggle="active"]').is_checked())
             card = page.locator('.status-card[data-status-key="normal"]')
             self.assertNotIn('悬停状态说明', card.inner_text())
