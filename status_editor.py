@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary, description_trigger_reference
 from modifier_conditions import read_runtime_modifiers, explain_modifiers
 from status_sources import read_source_notes, modifier_source_notes
+from status_reviews import reviewed_resolution, buff_definitions_fingerprint
 
 
 def tokens(value):
@@ -85,6 +86,8 @@ def status_conditions(row):
     notes.extend(row.get("unlock_conditions", []))
     notes.extend(row.get("reference_notes", []))
     notes.extend(row.get("origin_notes", []))
+    if not notes:
+        notes.extend(row.get('condition_review', {}).get('notes', []))
     if scripts and not notes:
         notes.extend(readable_runtime_summary(row.get('runtime_conditions', [])))
     if scripts and not notes:
@@ -192,11 +195,14 @@ def load_status_catalog(game_root: Path):
     if character_names.get('10136') == '已占用': character_names['10136'] = '纪茯苓'
     wanted = {script for row in result.values() for script in row['dynamicModifier']}
     runtime = read_runtime_modifiers(env, wanted)
+    definitions_hash = buff_definitions_fingerprint(env)
     sources = read_source_notes(env)
     linked_sources = modifier_source_notes(result, runtime)
     for row in result.values():
         row['runtime_conditions'] = explain_modifiers(row['dynamicModifier'], runtime, character_names)
         row['source_notes'] = sources.get(row['key'], []) + linked_sources.get(row['key'], [])
+        review = reviewed_resolution(row, runtime, definitions_hash, result)
+        if review: row['condition_review'] = review
     return result
 
 
@@ -236,6 +242,7 @@ def list_statuses(hero, catalog, query="", kind="all", source="all", sort="defau
                          records=len(instances), remaining=[x.get("lifeTime") for x in instances],
                          lifetime=detail.get("lifeTime"), tick=detail.get("tickType", ""),
                          conditions=status_conditions(detail),
+                         condition_review_state=detail.get('condition_review', {}).get('state', ''),
                          runtime_conditions=detail.get('runtime_conditions', []),
                          origin_notes=detail.get('origin_notes', []),
                          condition_references=detail.get("condition_references", []),

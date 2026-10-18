@@ -155,20 +155,29 @@ def read_runtime_modifiers(env, wanted):
             if not path.startswith(prefix) or not path.endswith('.asset'): continue
             key = path[len(prefix):-6]
             if key not in wanted: continue
+            unavailable = dict(path=path, conditions=[], stages=[], actions=[], failed_actions=[],
+                               read_error='resource_unreadable')
             pointer = info.get('asset', {})
-            if pointer.get('m_FileID') != 0: continue
+            if pointer.get('m_FileID') != 0:
+                result[key] = unavailable
+                continue
             reader = obj.assets_file.objects.get(pointer.get('m_PathID'))
-            if reader is None: continue
+            if reader is None:
+                result[key] = unavailable
+                continue
             try:
                 tree = reader.read_typetree()
                 serial = tree.get('serializationData', {})
-                if serial.get('SerializedFormat') != 0: continue
+                if serial.get('SerializedFormat') != 0:
+                    result[key] = unavailable
+                    continue
                 decoded = OdinReader(serial.get('SerializedBytes', [])).read()
                 result[key] = dict(path=path, conditions=list_values(decoded['conditions']),
                                    stages=tree.get('activeStages', []),
-                                   actions=list_values(decoded['actions']) if 'actions' in decoded else [])
+                                   actions=list_values(decoded['actions']) if 'actions' in decoded else [],
+                                   failed_actions=list_values(decoded['failedActions']) if 'failedActions' in decoded else [])
             except (ValueError, KeyError, TypeError, UnicodeError, struct.error, OverflowError):
-                continue
+                result[key] = unavailable
     return result
 
 
@@ -292,6 +301,9 @@ def explain_modifiers(keys, runtime, names=None):
         config = runtime.get(key)
         if config is None:
             branches.append(dict(script=key, timing=[], conditions=['当前资源中未能解析此分支'], complete=False, path=''))
+            continue
+        if config.get('read_error'):
+            branches.append(dict(script=key, timing=[], conditions=['脚本资源存在，但当前格式未能安全读取'], complete=False, path=config['path']))
             continue
         notes, complete = [], True
         for condition in config['conditions']:

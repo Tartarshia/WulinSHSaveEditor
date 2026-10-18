@@ -11,11 +11,63 @@ from decimal import Decimal
 
 from status_editor import list_statuses, numeric_effects, readonly_reason, set_status, load_status_catalog, status_conditions
 from status_reference import acquisition_reference, local_trigger_reference, readable_runtime_summary, description_trigger_reference
-from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition, read_runtime_tables
+from modifier_conditions import OdinReader, explain_modifiers, explain_condition, compact_condition, read_runtime_tables, read_runtime_modifiers
 from status_sources import source_notes, modifier_source_notes
+from status_reviews import FINGERPRINTS, NOTES, RESOURCE_GAPS, BUFF_DEFINITIONS_HASH, review_fingerprint, reviewed_resolution
 
 
 class StatusEditorTests(unittest.TestCase):
+    def test_present_but_unreadable_modifier_is_not_reported_as_missing(self):
+        path='Assets/__WuLin/Scripts/ModShare/Runtime/GDData/DynamicModifier/PetTraits/SiJiErDong1.asset'
+        unreadable=SimpleNamespace(read_typetree=lambda:dict(serializationData=dict(SerializedFormat=1)))
+        bundle=SimpleNamespace(type=SimpleNamespace(name='AssetBundle'),
+                               read_typetree=lambda:dict(m_Container=[(path,dict(asset=dict(m_FileID=0,m_PathID=1)))]),
+                               assets_file=SimpleNamespace(objects={1:unreadable}))
+        result=read_runtime_modifiers(SimpleNamespace(objects=[bundle]),{'PetTraits/SiJiErDong1'})
+        self.assertIn('read_error',result['PetTraits/SiJiErDong1'])
+        branch=explain_modifiers(['PetTraits/SiJiErDong1'],result)[0]
+        self.assertFalse(branch['complete'])
+        self.assertIn('存在',branch['conditions'][0])
+        self.assertEqual(branch['path'],path)
+
+    def test_review_inventory_and_configuration_drift_guards(self):
+        self.assertEqual(set(FINGERPRINTS),set(NOTES))
+        self.assertEqual(len(NOTES),70)
+        self.assertEqual(RESOURCE_GAPS,{3012,31050,31056})
+        self.assertTrue(all(re.fullmatch('[a-f0-9]{64}',value) for value in FINGERPRINTS.values()))
+        self.assertTrue(all('暂未解析' not in text and '分支' not in text for text in NOTES.values()))
+        self.assertIn('轻功',NOTES[40254])
+        row=dict(id=1405,key='test',continousEffect=[],dynamicModifier=['x'])
+        runtime=dict(x=dict(path='x',conditions=[],stages=[206],actions=[dict(value=1)],failed_actions=[]))
+        digest=review_fingerprint(row,runtime)
+        with patch.dict(FINGERPRINTS,{1405:digest}):
+            self.assertEqual(reviewed_resolution(row,runtime,BUFF_DEFINITIONS_HASH)['state'],'reviewed')
+            self.assertIsNone(reviewed_resolution(row,runtime,'changed-definition'))
+            self.assertIsNone(reviewed_resolution(row,runtime))
+            for changed in (dict(row,id=33527),dict(row,key='other'),dict(row,continousEffect=['攻击|1']),
+                            dict(row,instantEffect=['体质|1']),dict(row,endRemoveEffect=['体质|-1'])):
+                self.assertIsNone(reviewed_resolution(changed,runtime,BUFF_DEFINITIONS_HASH))
+            for field,value in (('conditions',[dict(x=1)]),('actions',[]),('failed_actions',[dict(x=1)]),('stages',[4])):
+                changed=copy.deepcopy(runtime);changed['x'][field]=value
+                self.assertIsNone(reviewed_resolution(row,changed,BUFF_DEFINITIONS_HASH))
+
+    def test_missing_pet_resource_is_explicit_not_a_guessed_wudao_effect(self):
+        row=dict(id=31050,key='宠物特征伺机而动',description='',continousEffect=[],dynamicModifier=['PetTraits/SiJiErDong1'])
+        with patch.dict(FINGERPRINTS,{31050:review_fingerprint(row,{})}):
+            review=reviewed_resolution(row,{},BUFF_DEFINITIONS_HASH)
+            self.assertEqual(review['state'],'resource_missing')
+            self.assertIn('不是武道天赋',review['notes'][0])
+            self.assertNotIn('增加100',review['notes'][0])
+            self.assertIsNone(reviewed_resolution(dict(row,description='新版已有说明'),{},BUFF_DEFINITIONS_HASH))
+            # Present-but-unreadable is not the same as missing from the index.
+            self.assertIsNone(reviewed_resolution(row,{'PetTraits/SiJiErDong1':dict(read_error='resource_unreadable')},BUFF_DEFINITIONS_HASH))
+        display=dict(self.catalog['特殊'],condition_review=review)
+        data=list_statuses(self.hero,{'特殊':display})['rows'][0]
+        self.assertEqual(data['condition_review_state'],'resource_missing')
+        self.assertIn('资源不完整',' '.join(data['conditions']))
+        self.assertTrue(data['readonly'])
+        with self.assertRaises(ValueError):set_status(self.hero,{'特殊':display},'特殊',True,0)
+
     def test_modifier_sources_reject_random_and_unknown_targets(self):
         action=dict(type='WuLin.ApplyBuffToCharacterAction, ModShare.Runtime',fields=dict(
             useRandomBuff=False,buffName='child',buffTarget=dict(fields=dict(target=2))))
